@@ -49,9 +49,11 @@ Script này sẽ tự động:
 - ✅ Cài dependencies từ `requirements.txt`
 - ✅ Cài SAM2 từ GitHub
 - ✅ Download SAM2.1 checkpoint (~2.4 GB)
+- ✅ Clone mã nguồn Columbia University `pix2gestalt`
+- ✅ Download Pix2Gestalt checkpoint (~15.5 GB qua Hugging Face CLI)
 - ✅ Auto-detect GPU → chọn settings tối ưu
 
-> ⚠️ **Lưu ý**: Không cần cài torch riêng — Colab đã có sẵn. Script sẽ dùng version từ `requirements.txt`.
+> ⚠️ **Lưu ý**: Phân đoạn tải 15.5 GB Pix2Gestalt sẽ mất khoảng **3-5 phút**. Vui lòng kiên nhẫn. Colab đã có sẵn `torch`, kịch bản sẽ cấu hình tự động.
 
 ---
 
@@ -229,12 +231,12 @@ print(os.getcwd())  # Phải là /content/AP_ProtoSAM_Amodal
 | Bước | VRAM sử dụng | Ghi chú |
 |------|:---:|---------|
 | SAM2 segment | ~6 GB | Giải phóng sau khi segment xong |
-| SD2 inpainting | ~5 GB | Đã bật attention slicing |
-| CLIP | ~0.5 GB | Chạy song song với SD2 |
-| **Peak (có optimize)** | **~6 GB** | Nhờ load tuần tự SAM → SD2 |
-| **Peak (không optimize)** | **~14 GB** | Nếu giữ cả SAM + SD2 trong VRAM |
+| Pix2Gestalt | ~9 GB | Sinh Amodal Shape Mask (Tự động fallback về Heuristics nếu lỗi/thiếu VRAM) |
+| SD2 inpainting | ~5 GB | Đã bật attention slicing. Dùng để inpaint Appearance |
+| **Peak (có optimize)** | **~15 GB** | Nhờ load tuần tự: SAM → free → Pix2Gestalt → SD2 |
+| **Peak (không optimize)** | **~28 GB** | Nếu giữ SAM, Pix2Gestalt và SD2 đồng thời (chỉ dùng cho A100) |
 
-> 💡 **Tip**: Luôn `del segmenter` + `torch.cuda.empty_cache()` sau bước segmentation để giải phóng ~6GB trước khi load SD2.
+> 💡 **Tip**: Mọi quá trình đều đã được tự động hóa. Nếu Pix2Gestalt làm văng VRAM (trên T4 16GB), hệ thống sẽ **KHÔNG CRASH** mà tự động ngắt và lả lướt chuyển về thuật toán **Heuristic Predictor** nhẹ tênh (khoanh vùng Amodal Mask bằng toán học).
 
 ---
 
@@ -242,6 +244,6 @@ print(os.getcwd())  # Phải là /content/AP_ProtoSAM_Amodal
 
 | GPU | Khuyến nghị |
 |-----|-------------|
-| **T4 (16GB)** | Load tuần tự (SAM → free → SD2). `points_per_side=32`, `max_iter=3` |
-| **A100 (40GB)** | Có thể giữ cả 2 model. Tăng `points_per_side=48`, `max_iter=4` cho chất lượng cao hơn |
-| **V100 (16GB)** | Giống T4. Nhanh hơn T4 ~20% nhờ FP16 Tensor Cores |
+| **T4 (16GB)** | Rất thiếu VRAM. Pipieline có thể tự động nhảy về Heuristic Predictor thay vì Pix2Gestalt. |
+| **A100 (40GB)** | Khuyến nghị tối thượng! Đủ chứa 15 GB của Pix2Gestalt và SD2 cùng lúc. Chất lượng sinh chân hoàn hảo. |
+| **V100 (16GB)** | Nhanh hơn T4 ~20% nhưng vẫn thiếu VRAM giống T4. |

@@ -60,7 +60,8 @@ if not os.path.exists("ckpt"):
     os.makedirs("ckpt")
 
 if not os.path.exists("ckpt/epoch=000005.ckpt"):
-    run("huggingface-cli download cvlab/pix2gestalt-weights epoch=000005.ckpt --local-dir ckpt/")
+    # Sử dụng wget trực tiếp tránh lỗi phân mảnh LFS của huggingface-cli
+    run("wget -q https://huggingface.co/cvlab/pix2gestalt-weights/resolve/main/epoch=000005.ckpt -O ckpt/epoch=000005.ckpt")
     print("✅ Pix2Gestalt 15.5GB weights downloaded.")
 else:
     print("✅ Pix2Gestalt weights already exist.")
