@@ -30,7 +30,7 @@ class Pix2GestaltPredictor:
             return
 
         try:
-            config = OmegaConf.load("pix2gestalt/configs/v1-inference.yaml")
+            config = OmegaConf.load("pix2gestalt/pix2gestalt/configs/sd-finetune-pix2gestalt-c_concat-256.yaml")
             model = instantiate_from_config(config.model)
             
             # Load raw 15.5GB weights
