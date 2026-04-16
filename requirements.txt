@@ -2,9 +2,9 @@
 # Python 3.12 | CUDA 12.8 | Tested on Google Colab Pro (A100-SXM4-40GB)
 
 # ── Core (DO NOT change these versions independently) ──
-torch==2.10.0
-torchvision
-torchaudio
+torch==2.10.0+cu128
+torchvision==0.25.0+cu128
+torchaudio==2.10.0+cu128
 
 # ── Segmentation ──
 # SAM3 (recommended):
@@ -15,18 +15,18 @@ torchaudio
 # ── Amodal Completion ──
 diffusers==0.37.1
 transformers==5.0.0
-accelerate
-safetensors
+accelerate==1.13.0
+safetensors==0.7.0
 
 # ── Image Processing ──
-opencv-python-headless
-Pillow
-numpy
+opencv-python-headless==4.13.0.92
+Pillow==11.3.0
+numpy==2.0.2
 
 # ── Server ──
-fastapi
-uvicorn
-python-multipart
+fastapi==0.135.3
+uvicorn==0.44.0
+python-multipart==0.0.26
 
 # ── Optional: faster inference ──
 # xformers
@@ -35,17 +35,17 @@ python-multipart
 # flash-attn-3
 
 # ── Pix2Gestalt LDM Backends ──
-omegaconf
+omegaconf==2.3.0
 pytorch-lightning==1.8.6
-huggingface_hub
-taming-transformers-rom1504
-carvekit-colab
-einops
-torchmetrics
-kornia
-webdataset
-lovely-numpy
-lovely-tensors
-imageio-ffmpeg
+huggingface_hub==1.10.1
+taming-transformers-rom1504==0.0.6
+carvekit-colab==4.1.2
+einops==0.8.2
+torchmetrics==1.9.0
+kornia==0.8.2
+webdataset==1.0.2
+lovely-numpy==0.2.22
+lovely-tensors==0.1.22
+imageio-ffmpeg==0.6.0
 git+https://github.com/openai/CLIP.git
-segment-anything
+segment-anything==1.0
