@@ -105,8 +105,9 @@ class AmodalCompleter:
             image, visible_mask, all_masks, H, W
         )
 
-        # Step 2: Select best inpainting prompt
+        # Step 2: Select best inpainting prompt (enhanced for full body)
         prompt = self._select_prompt(image, visible_mask, text_query)
+        prompt = f"complete full body of {prompt}, showing all legs and hidden parts"
 
         # Step 3: Prepare inpainting image (target on clean bg)
         target_img, background = self._prepare_target_image(image, visible_mask)
@@ -171,10 +172,20 @@ class AmodalCompleter:
         ).astype(bool)
         target_border_zone = dilated_target & (~visible_mask)
 
-        # Also get the convex hull of the visible mask to estimate full extent
+        # Estimate full amodal extent using multiple strategies:
+        # 1. Convex hull (captures overall shape)
         target_hull = self._convex_hull_mask(visible_mask, H, W)
-        # The "missing" region: inside hull but not in visible mask
-        estimated_hidden = target_hull & (~visible_mask)
+        # 2. Large dilation (captures nearby hidden parts like legs)
+        large_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (60, 60))
+        dilated_full = cv2.dilate(
+            visible_mask.astype(np.uint8), large_dilate
+        ).astype(bool)
+        # 3. Downward extension (legs/feet typically extend below visible body)
+        downward_ext = self._extend_downward(visible_mask, H, W, extend_ratio=0.3)
+        # Combine all estimates
+        full_extent = target_hull | dilated_full | downward_ext
+        # The "missing" region: inside full extent but not in visible mask
+        estimated_hidden = full_extent & (~visible_mask)
 
         for i, m in enumerate(all_masks):
             seg = m["segmentation"].astype(bool)
@@ -213,7 +224,7 @@ class AmodalCompleter:
 
         # The actual region to inpaint: estimated hidden area covered by occluders
         # (not the full occluder — we only want to reveal what's behind it)
-        inpaint_region = estimated_hidden | (occluder & target_hull)
+        inpaint_region = estimated_hidden | (occluder & full_extent)
 
         # Also add a border expansion to ensure smooth completion
         expand_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
@@ -250,6 +261,40 @@ class AmodalCompleter:
         hull_mask = np.zeros((H, W), dtype=np.uint8)
         cv2.fillConvexPoly(hull_mask, hull, 1)
         return hull_mask.astype(bool)
+
+    def _extend_downward(
+        self, mask: np.ndarray, H: int, W: int, extend_ratio: float = 0.3
+    ) -> np.ndarray:
+        """
+        Extend the mask downward to account for hidden legs/feet.
+        Objects like animals/people typically have parts extending below
+        the visible body when occluded by foreground objects.
+        """
+        ys, xs = np.where(mask)
+        if len(xs) == 0:
+            return mask.copy()
+
+        # Get bottom edge of the visible mask
+        x_min, x_max = xs.min(), xs.max()
+        y_max = ys.max()
+        mask_height = ys.max() - ys.min()
+
+        # Extend downward by extend_ratio of the mask height
+        extend_px = int(mask_height * extend_ratio)
+        y_extend = min(y_max + extend_px, H - 1)
+
+        # Create extension region (tapered trapezoid shape)
+        extended = mask.copy()
+        for y in range(y_max, y_extend):
+            # Gradually narrow the extension
+            progress = (y - y_max) / max(extend_px, 1)
+            shrink = int((x_max - x_min) * 0.15 * progress)
+            x_left = max(x_min + shrink, 0)
+            x_right = min(x_max - shrink, W - 1)
+            if x_left < x_right:
+                extended[y, x_left:x_right] = True
+
+        return extended
 
     def _check_occlusion_order(
         self,
