@@ -1,0 +1,35 @@
+# AmodalSeg — Requirements
+# Python 3.12 | CUDA 12.8 | Tested on Google Colab Pro (A100-SXM4-40GB)
+
+# ── Core (DO NOT change these versions independently) ──
+torch==2.10.0
+torchvision
+torchaudio
+
+# ── Segmentation ──
+# SAM3 (recommended):
+# pip install git+https://github.com/facebookresearch/sam3.git
+# SAM2 (fallback):
+# pip install git+https://github.com/facebookresearch/sam2.git
+
+# ── Amodal Completion ──
+diffusers==0.37.1
+transformers==5.0.0
+accelerate
+safetensors
+
+# ── Image Processing ──
+opencv-python-headless
+Pillow
+numpy
+
+# ── Server ──
+fastapi
+uvicorn
+python-multipart
+
+# ── Optional: faster inference ──
+# xformers
+# einops
+# ninja
+# flash-attn-3

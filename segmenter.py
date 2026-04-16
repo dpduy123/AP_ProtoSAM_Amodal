@@ -43,8 +43,8 @@ class SAMSegmenter:
                 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
                 print(f"[SAMSegmenter] SAM3 unavailable, loading SAM2 on {self.device}...")
                 sam2 = build_sam2(
-                    config_file="sam2_hiera_large.yaml",
-                    ckpt_path=checkpoint_path or "sam2_hiera_large.pt",
+                    config_file="configs/sam2.1/sam2.1_hiera_l.yaml",
+                    ckpt_path=checkpoint_path or "sam2.1_hiera_large.pt",
                     device=self.device,
                 )
                 self._generator = SAM2AutomaticMaskGenerator(sam2)
