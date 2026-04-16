@@ -57,9 +57,12 @@ if not os.path.exists("pix2gestalt"):
 if not os.path.exists("ckpt"):
     os.makedirs("ckpt")
 
-if not os.path.exists("ckpt/epoch=000005.ckpt"):
-    # Sử dụng wget trực tiếp tránh lỗi phân mảnh LFS của huggingface-cli
-    run("wget -q https://huggingface.co/cvlab/pix2gestalt-weights/resolve/main/epoch=000005.ckpt -O ckpt/epoch=000005.ckpt")
+if not os.path.exists("ckpt/epoch=000005.ckpt") or os.path.getsize("ckpt/epoch=000005.ckpt") < 1000000:
+    # Xoá file rác bị lỗi tải (nếu có)
+    if os.path.exists("ckpt/epoch=000005.ckpt"):
+        os.remove("ckpt/epoch=000005.ckpt")
+    # Tải trực tiếp từ server đại học Columbia thay vì HuggingFace bị dính LFS pointer lỗi
+    run("wget -q --show-progress -c https://gestalt.cs.columbia.edu/assets/epoch=000005.ckpt -O ckpt/epoch=000005.ckpt")
     print("✅ Pix2Gestalt 15.5GB weights downloaded.")
 else:
     print("✅ Pix2Gestalt weights already exist.")

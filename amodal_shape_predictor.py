@@ -73,10 +73,22 @@ class Pix2GestaltPredictor:
             sys.path.insert(0, os.path.join(os.getcwd(), 'pix2gestalt', 'pix2gestalt'))
             from inference import run_pix2gestalt
             
-            # Pix2Gestalt model takes 256x256 uint8 numpy arrays
             H, W = image.shape[:2]
-            resized_image = cv2.resize(image, (256, 256))
-            resized_mask = cv2.resize((visible_mask * 255).astype(np.uint8), (256, 256), interpolation=cv2.INTER_NEAREST)
+            S = max(H, W)
+            
+            # Tính toán lượng padding để giữ ảnh ở trung tâm (tránh bóp méo hình dạng gấu/vật thể)
+            pad_top = (S - H) // 2
+            pad_bottom = S - H - pad_top
+            pad_left = (S - W) // 2
+            pad_right = S - W - pad_left
+            
+            # Tạo viền xám [127,127,127] cho ảnh gốc, viền đèn cho mask
+            square_image = cv2.copyMakeBorder(image, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_CONSTANT, value=[127, 127, 127])
+            square_mask = cv2.copyMakeBorder((visible_mask * 255).astype(np.uint8), pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_CONSTANT, value=0)
+            
+            # Ép về 256x256 (Pix2Gestalt model takes 256x256 uint8 numpy arrays)
+            resized_image = cv2.resize(square_image, (256, 256), interpolation=cv2.INTER_AREA)
+            resized_mask = cv2.resize(square_mask, (256, 256), interpolation=cv2.INTER_NEAREST)
             
             rgb_visible_mask = np.zeros((256, 256, 3), dtype=np.uint8)
             rgb_visible_mask[:,:,0] = resized_mask
@@ -103,10 +115,25 @@ class Pix2GestaltPredictor:
             amodal_mask = cv2.morphologyEx(amodal_mask, cv2.MORPH_CLOSE, kernel)
             amodal_mask = cv2.morphologyEx(amodal_mask, cv2.MORPH_OPEN, kernel)
             
-            amodal_mask = amodal_mask.astype(bool) | visible_mask.astype(bool)
-            H, W = image.shape[:2]
-            amodal_mask = cv2.resize((amodal_mask*255).astype(np.uint8), (W, H), interpolation=cv2.INTER_NEAREST)
-            return amodal_mask > 127
+            # Phóng to amodal mask trở lại khung hình vuông S x S
+            amodal_mask = cv2.resize((amodal_mask * 255).astype(np.uint8), (S, S), interpolation=cv2.INTER_NEAREST)
+            
+            # Cắt xén (Crop) lề Padding để trả về đúng khung H x W ban đầu
+            if pad_bottom == 0:
+                amodal_mask_cropped = amodal_mask[pad_top:, :]
+            else:
+                amodal_mask_cropped = amodal_mask[pad_top:-pad_bottom, :]
+                
+            if pad_right != 0:
+                amodal_mask_cropped = amodal_mask_cropped[:, pad_left:-pad_right]
+            else:
+                amodal_mask_cropped = amodal_mask_cropped[:, pad_left:]
+                
+            amodal_mask_bool = amodal_mask_cropped > 127
+            
+            # Kết hợp với visible_mask gốc
+            final_amodal_mask = amodal_mask_bool | visible_mask.astype(bool)
+            return final_amodal_mask
             
         except Exception as e:
             print(f"[AmodalShapePredictor] Error during inference: {e}. Falling back to Heuristic.")
