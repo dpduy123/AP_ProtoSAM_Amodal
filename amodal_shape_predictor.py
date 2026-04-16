@@ -42,7 +42,8 @@ class Pix2GestaltPredictor:
             model = instantiate_from_config(config.model)
             
             # Load raw 15.5GB weights
-            state_dict = torch.load(ckpt_path, map_location="cpu")
+            # Disable weights_only because Lightning 1.x checkpoints contain pickled ModelCheckpoint objects
+            state_dict = torch.load(ckpt_path, map_location="cpu", weights_only=False)
             if "state_dict" in state_dict:
                 state_dict = state_dict["state_dict"]
                 
