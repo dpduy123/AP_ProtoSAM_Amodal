@@ -23,6 +23,7 @@ import torch
 import cv2
 from PIL import Image
 from typing import Optional
+from amodal_shape_predictor import Pix2GestaltPredictor
 
 
 class AmodalCompleter:
@@ -38,6 +39,10 @@ class AmodalCompleter:
         self._clip_model = None
         self._clip_processor = None
         self._instaorder = None
+        
+        # Pix2Gestalt Shape Predictor
+        self._shape_predictor = Pix2GestaltPredictor(device=self.device)
+        
         self._load_models(inpainting_model_id, clip_model_id)
 
     # ── Model loading ──────────────────────────────────────────────────────
@@ -100,40 +105,29 @@ class AmodalCompleter:
         """
         H, W = image.shape[:2]
 
-        # Step 1: Build occluder mask
-        occluder_mask = self._build_occluder_mask(
-            image, visible_mask, all_masks, H, W
-        )
+        # Step 1: Predict exact Amodal Mask (Shape) using Pix2Gestalt
+        print("[AmodalCompleter] Step 1: Predicting amodal shape...")
+        amodal_mask = self._shape_predictor.predict_full_shape(image, visible_mask)
+        
+        # The region that needs coloring is the difference between full shape and visible
+        missing_mask = amodal_mask & (~visible_mask.astype(bool))
+        
+        # If there's nothing missing, return early
+        if not missing_mask.any():
+            return self._finalize_rgba(image, amodal_mask, H, W)
 
-        # Step 2: Select best inpainting prompt (enhanced for full body)
+        # Step 2: Select best inpainting prompt
         prompt = self._select_prompt(image, visible_mask, text_query)
-        prompt = f"complete full body of {prompt}, showing all legs and hidden parts"
+        prompt = f"{prompt}, centered, high quality, consistent lighting"
 
-        # Step 3: Prepare inpainting image (target on clean bg)
+        # Step 3: Prepare inpainting target on perfectly clean neutral background
         target_img, background = self._prepare_target_image(image, visible_mask)
 
-        # Step 4: Iterative inpainting
-        amodal_mask = visible_mask.copy().astype(bool)
-        inpaint_img = target_img.copy()
-        prev_occ_mask = occluder_mask.copy()
-
-        for iteration in range(max_iter):
-            inpaint_img, newly_reconstructed = self._inpaint_step(
-                inpaint_img, occluder_mask, prompt, H, W
-            )
-
-            # Update amodal mask
-            amodal_mask = amodal_mask | newly_reconstructed
-
-            # Update occluder mask — remove regions now reconstructed
-            occluder_mask = occluder_mask & (~newly_reconstructed)
-
-            # Check convergence
-            delta = np.sum(np.abs(occluder_mask.astype(float) - prev_occ_mask.astype(float)))
-            normalized_delta = delta / (H * W)
-            if normalized_delta < epsilon or not occluder_mask.any():
-                break
-            prev_occ_mask = occluder_mask.copy()
+        # Step 4: Single-pass Inpainting (Appearance)
+        print("[AmodalCompleter] Step 4: Synthesizing appearance...")
+        inpaint_img, _ = self._inpaint_step(
+            target_img, missing_mask, prompt, H, W
+        )
 
         # Step 5: Alpha blending
         blended_rgb = self._alpha_blend(image, inpaint_img, visible_mask, amodal_mask)
@@ -143,6 +137,12 @@ class AmodalCompleter:
         rgba[:, :, :3] = blended_rgb
         rgba[:, :, 3] = (amodal_mask * 255).astype(np.uint8)
 
+        return rgba
+
+    def _finalize_rgba(self, image, amodal_mask, H, W):
+        rgba = np.zeros((H, W, 4), dtype=np.uint8)
+        rgba[:, :, :3] = image
+        rgba[:, :, 3] = (amodal_mask * 255).astype(np.uint8)
         return rgba
 
     # ── Step 1: Occlusion analysis ─────────────────────────────────────────
@@ -450,11 +450,10 @@ class AmodalCompleter:
         visible_mask: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
-        Isolate the target on a neutral background.
-        Background pixels are replaced with the image's median color
-        to provide a natural context-free canvas for inpainting.
+        Isolate the target on a neutral background [127, 127, 127].
+        This pure background provides a natural context-free canvas for inpainting.
         """
-        background = np.full_like(image, image.reshape(-1, 3).mean(axis=0).astype(np.uint8))
+        background = np.full_like(image, [127, 127, 127], dtype=np.uint8)
 
         target_img = image.copy().astype(float)
         mask_3ch = visible_mask[:, :, np.newaxis]
