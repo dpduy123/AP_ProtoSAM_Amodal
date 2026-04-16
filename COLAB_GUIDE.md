@@ -5,6 +5,17 @@
 - Tài khoản **Google Colab Pro** (hoặc Pro+)
 - GPU: **T4 (16GB)** hoặc **A100 (40GB)**
 
+### Môi trường đã kiểm chứng
+
+| Component | Version |
+|-----------|---------|
+| Python | 3.12 |
+| PyTorch | 2.10.0+cu128 |
+| CUDA | 12.8 |
+| diffusers | 0.37.1 |
+| transformers | 5.0.0 |
+| GPU test | NVIDIA A100-SXM4-40GB |
+
 ---
 
 ## Bước 1: Tạo notebook & chọn GPU
@@ -27,43 +38,20 @@
 %cd AP_ProtoSAM_Amodal
 ```
 
-### Cell 2 — Kiểm tra GPU
+### Cell 2 — Cài đặt tự động (1 lệnh duy nhất)
 
 ```python
-import torch
-print(f"PyTorch: {torch.__version__}")
-print(f"CUDA available: {torch.cuda.is_available()}")
-if torch.cuda.is_available():
-    print(f"GPU: {torch.cuda.get_device_name(0)}")
-    print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+%run colab_setup.py
 ```
 
-### Cell 3 — Cài dependencies
+Script này sẽ tự động:
+- ✅ Kiểm tra GPU
+- ✅ Cài dependencies từ `requirements.txt`
+- ✅ Cài SAM2 từ GitHub
+- ✅ Download SAM2.1 checkpoint (~2.4 GB)
+- ✅ Auto-detect GPU → chọn settings tối ưu
 
-> ⚠️ **KHÔNG** cài lại torch/torchvision — Colab đã có sẵn đúng version.
-
-```python
-# CHỈ cài thêm packages thiếu (KHÔNG pip install torch)
-!pip install -q torch==2.10.0 torchvision
-!pip install -q diffusers transformers accelerate safetensors
-!pip install -q opencv-python-headless Pillow
-!pip install -q fastapi uvicorn python-multipart
-```
-
-### Cell 4 — Cài SAM2
-
-```python
-# SAM2 (recommended)
-!pip install -q git+https://github.com/facebookresearch/sam2.git
-
-# Download SAM2 checkpoint (~2.4 GB)
-import os
-if not os.path.exists("sam2.1_hiera_large.pt"):
-    !wget -q https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
-    print("✅ SAM2 checkpoint downloaded")
-else:
-    print("✅ SAM2 checkpoint already exists")
-```
+> ⚠️ **Lưu ý**: Không cần cài torch riêng — Colab đã có sẵn. Script sẽ dùng version từ `requirements.txt`.
 
 ---
 
@@ -72,6 +60,7 @@ else:
 ### Option A — Chạy trực tiếp trong notebook (khuyến nghị)
 
 ```python
+import torch
 import numpy as np
 from PIL import Image
 from google.colab import files
@@ -161,29 +150,23 @@ files.download(output_name)
 
 ---
 
-### Option B — Chạy FastAPI server + ngrok (truy cập UI)
+### Option B — Dùng quick_test() (nhanh nhất)
+
+Sau khi chạy `colab_setup.py`, dùng hàm `quick_test()` có sẵn:
 
 ```python
-# Cài ngrok
-!pip install -q pyngrok
+from google.colab import files
 
-from pyngrok import ngrok
+# Upload ảnh
+uploaded = files.upload()
+image_path = list(uploaded.keys())[0]
 
-# Đăng ký free token tại https://dashboard.ngrok.com/signup
-ngrok.set_auth_token("YOUR_NGROK_TOKEN")  # <-- thay token của bạn
+# Chạy toàn bộ pipeline 1 lệnh
+rgba, masks = quick_test(image_path, mask_idx=0)
 
-# Tạo tunnel
-public_url = ngrok.connect(8000)
-print(f"🌐 Frontend URL: {public_url}")
-print(f"📡 API URL: {public_url}/docs")
+# Download kết quả
+files.download(image_path.rsplit(".", 1)[0] + "_amodal.png")
 ```
-
-```python
-# Chạy server (cell này sẽ block)
-!python server.py
-```
-
-> Mở `public_url` trong browser → dùng UI như bình thường (upload ảnh, click mask, complete).
 
 ---
 
@@ -214,11 +197,18 @@ print(os.getcwd())  # Phải là /content/AP_ProtoSAM_Amodal
 %cd /content/AP_ProtoSAM_Amodal
 ```
 
+### ❌ SAM config not found (MissingConfigException)
+
+```python
+# Đảm bảo SAM2 đã cài đúng
+!pip install -q git+https://github.com/facebookresearch/sam2.git
+```
+
 ### ❌ SAM checkpoint not found
 
 ```python
-# Download lại
-!wget https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+# Download lại SAM2.1 checkpoint
+!wget -q https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
 ```
 
 ### ❌ Cập nhật code mới từ GitHub
