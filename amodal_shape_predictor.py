@@ -73,20 +73,27 @@ class Pix2GestaltPredictor:
             sys.path.insert(0, os.path.join(os.getcwd(), 'pix2gestalt', 'pix2gestalt'))
             from inference import run_pix2gestalt
             
-            pil_image = Image.fromarray(image).convert("RGB")
-            pil_mask = Image.fromarray((visible_mask * 255).astype(np.uint8)).convert("L")
+            # Pix2Gestalt model takes 256x256 uint8 numpy arrays
+            H, W = image.shape[:2]
+            resized_image = cv2.resize(image, (256, 256))
+            resized_mask = cv2.resize((visible_mask * 255).astype(np.uint8), (256, 256), interpolation=cv2.INTER_NEAREST)
             
-            # The library typically returns a list of result PIL images
+            rgb_visible_mask = np.zeros((256, 256, 3), dtype=np.uint8)
+            rgb_visible_mask[:,:,0] = resized_mask
+            rgb_visible_mask[:,:,1] = resized_mask
+            rgb_visible_mask[:,:,2] = resized_mask
+            
+            # The library returns a list of synthesized np arrays
             with torch.inference_mode():
-                result_pil = run_pix2gestalt(
-                    self.model, 
-                    pil_image, 
-                    [pil_mask], 
-                    device=self.device
+                result_np = run_pix2gestalt(
+                    model=self.model, 
+                    device=self.device,
+                    input_im=resized_image, 
+                    visible_mask=rgb_visible_mask,
+                    n_samples=1
                 )[0]
                 
             # 2. Extract Shape from Synthesized Output
-            result_np = np.array(result_pil)
             bg_color = np.median([result_np[0,0], result_np[0,-1], result_np[-1,0], result_np[-1,-1]], axis=0)
             diff = np.linalg.norm(result_np - bg_color, axis=2)
             

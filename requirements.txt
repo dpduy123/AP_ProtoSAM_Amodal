@@ -48,3 +48,4 @@ lovely-numpy
 lovely-tensors
 imageio-ffmpeg
 git+https://github.com/openai/CLIP.git
+segment-anything
