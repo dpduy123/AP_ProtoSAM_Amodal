@@ -114,7 +114,13 @@ class AmodalCompleter:
         
         # If there's nothing missing, return early
         if not missing_mask.any():
-            return self._finalize_rgba(image, amodal_mask, H, W)
+            rgba = self._finalize_rgba(image, amodal_mask, H, W)
+            return {
+                "input_image": image,
+                "visible_mask": visible_mask,
+                "amodal_mask": amodal_mask,
+                "inpainted_rgba": rgba
+            }
 
         # Step 2: Select best inpainting prompt
         prompt = self._select_prompt(image, visible_mask, text_query)
@@ -133,11 +139,14 @@ class AmodalCompleter:
         blended_rgb = self._alpha_blend(image, inpaint_img, visible_mask, amodal_mask)
 
         # Step 6: Build RGBA output
-        rgba = np.zeros((H, W, 4), dtype=np.uint8)
-        rgba[:, :, :3] = blended_rgb
-        rgba[:, :, 3] = (amodal_mask * 255).astype(np.uint8)
+        rgba = self._finalize_rgba(blended_rgb, amodal_mask, H, W)
 
-        return rgba
+        return {
+            "input_image": image,
+            "visible_mask": visible_mask,
+            "amodal_mask": amodal_mask,
+            "inpainted_rgba": rgba
+        }
 
     def _finalize_rgba(self, image, amodal_mask, H, W):
         rgba = np.zeros((H, W, 4), dtype=np.uint8)

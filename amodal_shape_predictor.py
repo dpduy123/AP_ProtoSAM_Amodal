@@ -4,7 +4,7 @@ from PIL import Image
 import cv2
 
 class Pix2GestaltPredictor:
-    def __init__(self, model_id: str = "cvlab-columbia/pix2gestalt", device: str = "cuda"):
+    def __init__(self, model_id: str = "cvlab/pix2gestalt-weights", device: str = "cuda"):
         """
         Initializes the Pix2Gestalt amodal shape predictor.
         Requires ~24GB VRAM. It synthesizes the whole object from a visible mask.

@@ -111,7 +111,7 @@ MASK_ID = 0  # <-- thay số này
 target_mask = masks[MASK_ID]["segmentation"].astype(bool)
 
 completer = AmodalCompleter()
-rgba_result = completer.complete(
+outputs = completer.complete(
     image=img,
     visible_mask=target_mask,
     all_masks=masks,
@@ -122,16 +122,20 @@ print("✅ Amodal completion done!")
 
 ```python
 # ── Xem kết quả ──
-fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+fig, axes = plt.subplots(1, 4, figsize=(20, 5))
 
-axes[0].imshow(img)
+axes[0].imshow(outputs["input_image"])
 axes[0].set_title("Original")
 
-axes[1].imshow(target_mask, cmap="gray")
+axes[1].imshow(outputs["visible_mask"], cmap="gray")
 axes[1].set_title(f"Visible Mask (#{MASK_ID})")
 
-axes[2].imshow(rgba_result)
-axes[2].set_title("Amodal Result (RGBA)")
+axes[2].imshow(outputs["amodal_mask"], cmap="gray")
+axes[2].set_title("Amodal Mask (Shape)")
+
+rgba_result = outputs["inpainted_rgba"]
+axes[3].imshow(rgba_result)
+axes[3].set_title("Amodal Result (RGBA)")
 
 for ax in axes:
     ax.axis("off")

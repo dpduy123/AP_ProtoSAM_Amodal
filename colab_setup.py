@@ -149,12 +149,13 @@ def quick_test(image_path: str, mask_idx: int = 0):
     print(f"\n[2/2] Running amodal completion on mask {mask_idx}...")
     completer = AmodalCompleter()
     target_mask = masks[mask_idx]["segmentation"].astype(bool)
-    rgba = completer.complete(
+    outputs = completer.complete(
         image=img,
         visible_mask=target_mask,
         all_masks=masks,
         max_iter=settings.get("max_iter", 3),
     )
+    rgba = outputs["inpainted_rgba"]
     print_gpu_usage("after completion")
 
     # Save result
