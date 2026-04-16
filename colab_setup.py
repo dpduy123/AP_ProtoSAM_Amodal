@@ -23,7 +23,7 @@ print("=" * 50)
 import torch
 if torch.cuda.is_available():
     gpu_name = torch.cuda.get_device_name(0)
-    gpu_mem = torch.cuda.get_device_properties(0).total_mem / 1e9
+    gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
     print(f"✅ GPU: {gpu_name} ({gpu_mem:.1f} GB)")
 else:
     print("❌ No GPU! Go to Runtime → Change runtime type → GPU")
@@ -60,7 +60,7 @@ def print_gpu_usage(label=""):
     if torch.cuda.is_available():
         allocated = torch.cuda.memory_allocated() / 1e9
         reserved = torch.cuda.memory_reserved() / 1e9
-        total = torch.cuda.get_device_properties(0).total_mem / 1e9
+        total = torch.cuda.get_device_properties(0).total_memory / 1e9
         print(f"[GPU {label}] Allocated: {allocated:.2f}GB | Reserved: {reserved:.2f}GB | Total: {total:.1f}GB")
 
 # ══════════════════════════════════════════════════════════════
@@ -72,7 +72,7 @@ def get_optimal_settings():
     if not torch.cuda.is_available():
         return {"device": "cpu", "inpaint_size": 512, "max_iter": 2, "inference_steps": 20}
 
-    gpu_mem = torch.cuda.get_device_properties(0).total_mem / 1e9
+    gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
     gpu_name = torch.cuda.get_device_name(0)
 
     if gpu_mem >= 35:  # A100 40GB
