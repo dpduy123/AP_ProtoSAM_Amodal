@@ -44,7 +44,28 @@ if not os.path.exists(SAM2_CKPT):
 else:
     print(f"✅ {SAM2_CKPT} already exists")
 
-print("\n✅ All dependencies installed!")
+# --- Pix2Gestalt Manual Setup ---
+print("\n[Pix2Gestalt] Fetching codebase and 15GB weights...")
+# Install additional dependencies
+run("pip install -q omegaconf pytorch-lightning huggingface_hub taming-transformers-rom1504")
+
+# Clone Pix2Gestalt and its submodules
+if not os.path.exists("pix2gestalt"):
+    run("git clone https://github.com/cvlab-columbia/pix2gestalt.git")
+    run("cd pix2gestalt && git submodule update --init --recursive")
+    print("✅ Pix2Gestalt codebase cloned.")
+
+# Download 15.5GB Checkpoint
+if not os.path.exists("ckpt"):
+    os.makedirs("ckpt")
+
+if not os.path.exists("ckpt/epoch=000005.ckpt"):
+    run("huggingface-cli download cvlab/pix2gestalt-weights epoch=000005.ckpt --local-dir ckpt/")
+    print("✅ Pix2Gestalt 15.5GB weights downloaded.")
+else:
+    print("✅ Pix2Gestalt weights already exist.")
+
+print("\n✅ All dependencies installed and models loaded!")
 
 # ══════════════════════════════════════════════════════════════
 # Cell 2: VRAM monitoring utility

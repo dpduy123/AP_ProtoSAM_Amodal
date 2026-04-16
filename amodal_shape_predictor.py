@@ -1,32 +1,50 @@
+import sys
+import os
 import torch
 import numpy as np
 from PIL import Image
 import cv2
 
+# Add Pix2Gestalt repo to python path
+sys.path.append(os.path.join(os.getcwd(), 'pix2gestalt'))
+
+try:
+    from omegaconf import OmegaConf
+    from ldm.util import instantiate_from_config
+except ImportError:
+    pass
+
 class Pix2GestaltPredictor:
-    def __init__(self, model_id: str = "cvlab/pix2gestalt-weights", device: str = "cuda"):
+    def __init__(self, ckpt_path: str = "ckpt/epoch=000005.ckpt", device: str = "cuda"):
         """
-        Initializes the Pix2Gestalt amodal shape predictor.
-        Requires ~24GB VRAM. It synthesizes the whole object from a visible mask.
+        Loads the Pix2Gestalt amodal shape predictor from a raw PyTorch Lightning checkpoint.
+        Requires ~24GB VRAM.
         """
         self.device = device
-        print(f"[AmodalShapePredictor] Loading Pix2Gestalt from {model_id}...")
+        self.model = None
+        print(f"[AmodalShapePredictor] Loading Pix2Gestalt Checkpoint from {ckpt_path}...")
         
-        # We will load it using custom pipeline if available or fall back to standard
+        if not os.path.exists(ckpt_path):
+            print(f"[AmodalShapePredictor] Warning: {ckpt_path} not found. Did you run huggingface-cli?")
+            print("[AmodalShapePredictor] Falling back to Heuristic Predictor.")
+            return
+
         try:
-            from diffusers import DiffusionPipeline
-            self.pipe = DiffusionPipeline.from_pretrained(
-                model_id, 
-                custom_pipeline=model_id, 
-                torch_dtype=torch.float16,
-                trust_remote_code=True
-            ).to(self.device)
-            # Enable xformers or slicing if necessary
-            self.pipe.enable_xformers_memory_efficient_attention()
+            config = OmegaConf.load("pix2gestalt/configs/v1-inference.yaml")
+            model = instantiate_from_config(config.model)
+            
+            # Load raw 15.5GB weights
+            state_dict = torch.load(ckpt_path, map_location="cpu")
+            if "state_dict" in state_dict:
+                state_dict = state_dict["state_dict"]
+                
+            model.load_state_dict(state_dict, strict=False)
+            self.model = model.to(self.device).eval()
             print("[AmodalShapePredictor] Pix2Gestalt loaded successfully.")
         except Exception as e:
-            print(f"[AmodalShapePredictor] Warning: Failed to load Pix2Gestalt pipeline: {e}")
-            self.pipe = None
+            print(f"[AmodalShapePredictor] Warning: Failed to initialize network: {e}")
+            print("[AmodalShapePredictor] Falling back to Heuristic Predictor.")
+            self.model = None
 
     def predict_full_shape(self, image: np.ndarray, visible_mask: np.ndarray) -> np.ndarray:
         """
@@ -36,54 +54,61 @@ class Pix2GestaltPredictor:
         Returns:
             amodal_mask: HxW bool array of the predicted whole object shape
         """
-        if self.pipe is None:
-            # Fallback if model not loaded: returning visible mask
-            return visible_mask
+        if self.model is None:
+            return self._heuristic_fallback(visible_mask)
 
-        # 1. Prepare inputs for Pix2Gestalt
-        H, W = image.shape[:2]
+        # 1. Run full Pix2Gestalt Inference
+        print("[AmodalShapePredictor] Synthesizing amodal object with Pix2Gestalt LDM...")
         
-        pil_image = Image.fromarray(image).convert("RGB")
-        pil_mask = Image.fromarray((visible_mask * 255).astype(np.uint8)).convert("L")
+        try:
+            sys.path.insert(0, os.path.join(os.getcwd(), 'pix2gestalt', 'pix2gestalt'))
+            from inference import run_pix2gestalt
+            
+            pil_image = Image.fromarray(image).convert("RGB")
+            pil_mask = Image.fromarray((visible_mask * 255).astype(np.uint8)).convert("L")
+            
+            # The library typically returns a list of result PIL images
+            with torch.inference_mode():
+                result_pil = run_pix2gestalt(
+                    self.model, 
+                    pil_image, 
+                    [pil_mask], 
+                    device=self.device
+                )[0]
+                
+            # 2. Extract Shape from Synthesized Output
+            result_np = np.array(result_pil)
+            bg_color = np.median([result_np[0,0], result_np[0,-1], result_np[-1,0], result_np[-1,-1]], axis=0)
+            diff = np.linalg.norm(result_np - bg_color, axis=2)
+            
+            amodal_mask = (diff > 15).astype(np.uint8)
+            
+            kernel = np.ones((5, 5), np.uint8)
+            amodal_mask = cv2.morphologyEx(amodal_mask, cv2.MORPH_CLOSE, kernel)
+            amodal_mask = cv2.morphologyEx(amodal_mask, cv2.MORPH_OPEN, kernel)
+            
+            amodal_mask = amodal_mask.astype(bool) | visible_mask.astype(bool)
+            H, W = image.shape[:2]
+            amodal_mask = cv2.resize((amodal_mask*255).astype(np.uint8), (W, H), interpolation=cv2.INTER_NEAREST)
+            return amodal_mask > 127
+            
+        except Exception as e:
+            print(f"[AmodalShapePredictor] Error during inference: {e}. Falling back to Heuristic.")
+            return self._heuristic_fallback(visible_mask)
 
-        # 2. Run Inference
-        print("[AmodalShapePredictor] Synthesizing whole object with Pix2Gestalt...")
-        with torch.inference_mode():
-            # The pix2gestalt pipeline usually takes image and mask_image
-            # Note: actual interface might vary based on their HF custom_pipeline signature
-            try:
-                result_image = self.pipe(
-                    image=pil_image,
-                    mask_image=pil_mask,
-                    num_inference_steps=50,
-                    guidance_scale=7.5
-                ).images[0]
-            except TypeError:
-                print("[AmodalShapePredictor] Inference signature mismatch. Returning visible mask.")
-                return visible_mask
-
-        # 3. Extract the Binarized Amodal Mask from the synthesized result
-        # Pix2Gestalt typically outputs the object on a grey/white background.
-        # We do a basic background subtraction to get the mask.
-        result_np = np.array(result_image)
+    def _heuristic_fallback(self, visible_mask: np.ndarray) -> np.ndarray:
+        print("[AmodalShapePredictor] Expanding visible mask using heuristics...")
+        amodal_mask = (visible_mask.copy() * 255).astype(np.uint8)
         
-        # Assuming the background of the output is relatively uniform (e.g., grey)
-        # We find the color of the corners and threshold
-        bg_color = np.median([result_np[0,0], result_np[0,-1], result_np[-1,0], result_np[-1,-1]], axis=0)
-        diff = np.linalg.norm(result_np - bg_color, axis=2)
+        kernel = np.ones((40, 40), np.uint8)
+        amodal_mask = cv2.dilate(amodal_mask, kernel, iterations=1)
         
-        # Threshold difference to get the mask
-        amodal_mask = (diff > 15).astype(np.uint8)
-        
-        # Morphological operations to clean up the mask
-        kernel = np.ones((5, 5), np.uint8)
-        amodal_mask = cv2.morphologyEx(amodal_mask, cv2.MORPH_CLOSE, kernel)
-        amodal_mask = cv2.morphologyEx(amodal_mask, cv2.MORPH_OPEN, kernel)
-        
-        # Ensure that the visible mask is always included in the amodal mask
-        amodal_mask = amodal_mask.astype(bool) | visible_mask.astype(bool)
-        
-        # Resize back to original H, W just in case the pipeline resized it
-        amodal_mask = cv2.resize((amodal_mask*255).astype(np.uint8), (W, H), interpolation=cv2.INTER_NEAREST)
-        
+        ys, xs = np.where(visible_mask)
+        if len(ys) > 0:
+            height = ys.max() - ys.min()
+            bottom_y = ys.max()
+            extend_to = min(amodal_mask.shape[0], int(bottom_y + height * 0.4))
+            x_min, x_max = xs.min(), xs.max()
+            amodal_mask[bottom_y:extend_to, x_min:x_max] = 255
+            
         return amodal_mask > 127
