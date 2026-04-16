@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(os.getcwd(), 'pix2gestalt', 'pix2gestalt'))
 try:
     from omegaconf import OmegaConf
     from ldm.util import instantiate_from_config
+    from ldm.util import create_carvekit_interface # Advanced BG Matting
     IMPORT_SUCCESS = True
 except ImportError as e:
     print(f"[AmodalShapePredictor] Core libraries missing: {e}")
@@ -49,6 +50,7 @@ class Pix2GestaltPredictor:
                 
             model.load_state_dict(state_dict, strict=False)
             self.model = model.to(self.device).eval()
+            self.carvekit_interface = create_carvekit_interface()
             print("[AmodalShapePredictor] Pix2Gestalt loaded successfully.")
         except Exception as e:
             print(f"[AmodalShapePredictor] Warning: Failed to initialize network: {e}")
@@ -105,11 +107,15 @@ class Pix2GestaltPredictor:
                     n_samples=1
                 )[0]
                 
-            # 2. Extract Shape from Synthesized Output
-            bg_color = np.median([result_np[0,0], result_np[0,-1], result_np[-1,0], result_np[-1,-1]], axis=0)
-            diff = np.linalg.norm(result_np - bg_color, axis=2)
+            # 2. Extract Shape from Synthesized Output using Advanced Matting (CarveKit)
+            # result_np is an RGB image [0, 255]. Carvekit expects PIL.
+            result_pil = Image.fromarray(result_np)
             
-            amodal_mask = (diff > 15).astype(np.uint8)
+            amodal_rgba = np.array(self.carvekit_interface([result_pil])[0])
+            alpha_channel = amodal_rgba[:, :, 3]
+            
+            # 3. Post-processing the alpha mask to ensure clean borders
+            amodal_mask = (alpha_channel > 0).astype(np.uint8)
             
             kernel = np.ones((5, 5), np.uint8)
             amodal_mask = cv2.morphologyEx(amodal_mask, cv2.MORPH_CLOSE, kernel)
