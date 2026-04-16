@@ -29,7 +29,7 @@ class AmodalCompleter:
 
     def __init__(
         self,
-        inpainting_model_id: str = "stabilityai/stable-diffusion-2-inpainting",
+        inpainting_model_id: str = "sd2-community/stable-diffusion-2-inpainting",
         clip_model_id: str = "openai/clip-vit-base-patch32",
         device: Optional[str] = None,
     ):
