@@ -155,32 +155,101 @@ class AmodalCompleter:
         W: int,
     ) -> np.ndarray:
         """
-        Identify which segments occlude the target object using spatial analysis.
-        Uses InstaOrderNet if available, falls back to heuristic z-order estimation.
+        Identify which segments occlude the target object.
+
+        Key insight: SAM produces non-overlapping masks, so adjacent masks
+        (touching the target boundary) are likely occluders. We dilate the
+        target mask to detect these adjacencies.
         """
         occluder = np.zeros((H, W), dtype=bool)
+
+        # Dilate the visible mask to find nearby/adjacent masks
+        # This is critical because SAM masks typically DON'T overlap
+        dilate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
+        dilated_target = cv2.dilate(
+            visible_mask.astype(np.uint8), dilate_kernel
+        ).astype(bool)
+        target_border_zone = dilated_target & (~visible_mask)
+
+        # Also get the convex hull of the visible mask to estimate full extent
+        target_hull = self._convex_hull_mask(visible_mask, H, W)
+        # The "missing" region: inside hull but not in visible mask
+        estimated_hidden = target_hull & (~visible_mask)
 
         for i, m in enumerate(all_masks):
             seg = m["segmentation"].astype(bool)
 
-            # Skip if this is the target mask
+            # Skip if this is the target mask itself
             if np.array_equal(seg, visible_mask):
                 continue
 
-            # Check for overlap with visible mask boundary
-            overlap = seg & visible_mask
-            if not overlap.any():
+            # Check 1: Direct overlap (rare with SAM, but possible)
+            direct_overlap = seg & visible_mask
+            # Check 2: Adjacent — mask touches the dilated target boundary
+            adjacent_overlap = seg & target_border_zone
+            # Check 3: Mask covers the estimated hidden region
+            hidden_overlap = seg & estimated_hidden
+
+            if not direct_overlap.any() and not adjacent_overlap.any() and not hidden_overlap.any():
                 continue
 
-            # Try InstaOrderNet for precise occlusion order
-            is_occluder = self._check_occlusion_order(image, visible_mask, seg)
-            if is_occluder:
-                occluder |= seg
+            # Score how likely this mask is an occluder
+            adjacency_score = adjacent_overlap.sum() / max(target_border_zone.sum(), 1)
+            hidden_score = hidden_overlap.sum() / max(estimated_hidden.sum(), 1)
+
+            # If the mask significantly overlaps with where we expect hidden parts
+            # OR it's strongly adjacent to the target boundary → it's an occluder
+            if hidden_score > 0.05 or adjacency_score > 0.03 or direct_overlap.any():
+                try:
+                    is_occluder = self._check_occlusion_order(image, visible_mask, seg)
+                except Exception:
+                    # Default: assume adjacent masks in the hidden region are occluders
+                    is_occluder = hidden_score > 0.02 or adjacency_score > 0.02
+                if is_occluder:
+                    occluder |= seg
 
         # Handle boundary cases: expand along image edges
         occluder = self._handle_boundary_occlusion(visible_mask, occluder, H, W)
 
-        return occluder
+        # The actual region to inpaint: estimated hidden area covered by occluders
+        # (not the full occluder — we only want to reveal what's behind it)
+        inpaint_region = estimated_hidden | (occluder & target_hull)
+
+        # Also add a border expansion to ensure smooth completion
+        expand_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+        inpaint_region = cv2.dilate(
+            inpaint_region.astype(np.uint8), expand_kernel
+        ).astype(bool)
+
+        # Don't inpaint inside the already-visible mask
+        inpaint_region = inpaint_region & (~visible_mask)
+
+        print(f"[AmodalCompleter] Occluder masks found: {occluder.any()}")
+        print(f"[AmodalCompleter] Estimated hidden region: {estimated_hidden.sum()} px")
+        print(f"[AmodalCompleter] Inpaint region: {inpaint_region.sum()} px")
+
+        return inpaint_region
+
+    def _convex_hull_mask(
+        self, mask: np.ndarray, H: int, W: int
+    ) -> np.ndarray:
+        """
+        Compute the convex hull of a binary mask.
+        The convex hull estimates the full amodal extent of the object.
+        """
+        contours, _ = cv2.findContours(
+            mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        if not contours:
+            return mask.copy()
+
+        # Merge all contours and find convex hull
+        all_points = np.concatenate(contours)
+        hull = cv2.convexHull(all_points)
+
+        hull_mask = np.zeros((H, W), dtype=np.uint8)
+        cv2.fillConvexPoly(hull_mask, hull, 1)
+        return hull_mask.astype(bool)
 
     def _check_occlusion_order(
         self,
@@ -214,12 +283,25 @@ class AmodalCompleter:
     ) -> bool:
         """
         Fallback heuristic: a segment likely occludes the target if:
-        - It overlaps with the target's boundary region (not interior)
-        - Its center-of-mass is "above" (lower index in visual stack)
+        - It is adjacent to the target's boundary
+        - It covers area where the target's convex hull extends
+        - Smaller objects in front of larger ones are likely occluders
         """
+        target_area = target_mask.sum()
+        candidate_area = candidate_mask.sum()
+
+        # Dilate target to check adjacency
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+        dilated_target = cv2.dilate(target_mask.astype(np.uint8), kernel).astype(bool)
+        adjacency = (candidate_mask & dilated_target & ~target_mask).sum()
+
+        # If there's significant adjacency, likely an occluder
+        if adjacency > 50:
+            return True
+
         # Erode target mask to get interior
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-        target_interior = cv2.erode(target_mask.astype(np.uint8), kernel).astype(bool)
+        erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        target_interior = cv2.erode(target_mask.astype(np.uint8), erode_kernel).astype(bool)
         target_boundary = target_mask & (~target_interior)
 
         # Overlap with boundary (not interior) → likely occlusion

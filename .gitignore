@@ -1,0 +1,43 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── Virtual environments ──
+venv/
+env/
+.env/
+
+# ── Model checkpoints (large files) ──
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Jupyter ──
+.ipynb_checkpoints/
+
+# ── Output / results ──
+*_amodal.png
+results/
+outputs/
+
+# ── HuggingFace cache ──
+.cache/
+
+test/
