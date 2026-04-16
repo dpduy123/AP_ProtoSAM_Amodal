@@ -1,7 +1,7 @@
 """
 AmodalSeg — Google Colab Pro Setup Script
 ==========================================
-Copy toàn bộ file này vào 1 cell trong Colab notebook.
+Chạy trên Colab: %cd AP_ProtoSAM_Amodal && %run colab_setup.py
 
 Colab Pro: chọn Runtime → Change runtime type → GPU → T4 hoặc A100
 - T4 (16GB): đủ chạy, dùng attention slicing
@@ -12,7 +12,7 @@ Colab Pro: chọn Runtime → Change runtime type → GPU → T4 hoặc A100
 # Cell 1: Check GPU & Install dependencies
 # ══════════════════════════════════════════════════════════════
 
-import subprocess, sys
+import subprocess, sys, os
 
 def run(cmd):
     print(f"▸ {cmd}")
@@ -30,18 +30,13 @@ else:
     sys.exit(1)
 print("=" * 50)
 
-# Install packages
-run("pip install -q torch torchvision --upgrade")
-run("pip install -q diffusers transformers accelerate safetensors")
-run("pip install -q xformers")  # Memory-efficient attention (~30% less VRAM)
-run("pip install -q opencv-python-headless Pillow")
-run("pip install -q fastapi uvicorn python-multipart")
+# Install from requirements.txt
+run("pip install -q -r requirements.txt")
 
-# Install SAM2 (recommended over SAM3 for stability)
+# Install SAM2 (not on PyPI, install via git)
 run("pip install -q git+https://github.com/facebookresearch/sam2.git")
 
-# Download SAM2 checkpoint
-import os
+# Download SAM2.1 checkpoint
 SAM2_CKPT = "sam2.1_hiera_large.pt"
 if not os.path.exists(SAM2_CKPT):
     run(f"wget -q https://dl.fbaipublicfiles.com/segment_anything_2/092824/{SAM2_CKPT}")
@@ -114,28 +109,7 @@ settings = get_optimal_settings()
 print(f"Settings: {settings}")
 
 # ══════════════════════════════════════════════════════════════
-# Cell 4: Run the server (with ngrok for external access)
-# ══════════════════════════════════════════════════════════════
-
-"""
-# Option A: Run with ngrok (access from browser)
-# ------------------------------------------------
-# !pip install -q pyngrok
-# from pyngrok import ngrok
-# ngrok.set_auth_token("YOUR_NGROK_TOKEN")  # Get from ngrok.com
-# public_url = ngrok.connect(8000)
-# print(f"🌐 Public URL: {public_url}")
-# !python server.py
-
-# Option B: Run directly in Colab (use Colab's built-in proxy)
-# ------------------------------------------------
-# from google.colab.output import eval_js
-# print(eval_js("google.colab.kernel.proxyPort(8000)"))
-# !python server.py
-"""
-
-# ══════════════════════════════════════════════════════════════
-# Cell 5: Quick test — run pipeline directly without server
+# Cell 4: Quick test — run pipeline directly without server
 # ══════════════════════════════════════════════════════════════
 
 def quick_test(image_path: str, mask_idx: int = 0):
@@ -201,7 +175,4 @@ def quick_test(image_path: str, mask_idx: int = 0):
 
 # Usage:
 # rgba, masks = quick_test("your_image.jpg", mask_idx=0)
-""",
-Description="Setup script for running the AmodalSeg pipeline on Google Colab Pro with GPU auto-detection and VRAM optimizations.",
-IsArtifact=false
-"""
+
