@@ -5,14 +5,17 @@ import numpy as np
 from PIL import Image
 import cv2
 
-# Add Pix2Gestalt repo to python path
-sys.path.append(os.path.join(os.getcwd(), 'pix2gestalt'))
+# Add BOTH Pix2Gestalt root and inner repo to python path
+sys.path.insert(0, os.path.join(os.getcwd(), 'pix2gestalt'))
+sys.path.insert(0, os.path.join(os.getcwd(), 'pix2gestalt', 'pix2gestalt'))
 
 try:
     from omegaconf import OmegaConf
     from ldm.util import instantiate_from_config
-except ImportError:
-    pass
+    IMPORT_SUCCESS = True
+except ImportError as e:
+    print(f"[AmodalShapePredictor] Core libraries missing: {e}")
+    IMPORT_SUCCESS = False
 
 class Pix2GestaltPredictor:
     def __init__(self, ckpt_path: str = "ckpt/epoch=000005.ckpt", device: str = "cuda"):
@@ -25,7 +28,12 @@ class Pix2GestaltPredictor:
         print(f"[AmodalShapePredictor] Loading Pix2Gestalt Checkpoint from {ckpt_path}...")
         
         if not os.path.exists(ckpt_path):
-            print(f"[AmodalShapePredictor] Warning: {ckpt_path} not found. Did you run huggingface-cli?")
+            print(f"[AmodalShapePredictor] Warning: {ckpt_path} not found. Did you run the wget command?")
+            print("[AmodalShapePredictor] Falling back to Heuristic Predictor.")
+            return
+            
+        if not IMPORT_SUCCESS:
+            print("[AmodalShapePredictor] Warning: LDM or OmegaConf not installed.")
             print("[AmodalShapePredictor] Falling back to Heuristic Predictor.")
             return
 

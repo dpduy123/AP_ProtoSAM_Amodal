@@ -46,8 +46,6 @@ else:
 
 # --- Pix2Gestalt Manual Setup ---
 print("\n[Pix2Gestalt] Fetching codebase and 15GB weights...")
-# Install additional dependencies
-run("pip install -q omegaconf pytorch-lightning huggingface_hub taming-transformers-rom1504")
 
 # Clone Pix2Gestalt and its submodules
 if not os.path.exists("pix2gestalt"):

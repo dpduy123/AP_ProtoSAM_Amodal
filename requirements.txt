@@ -33,3 +33,17 @@ python-multipart
 # einops
 # ninja
 # flash-attn-3
+
+# ── Pix2Gestalt LDM Backends ──
+omegaconf
+pytorch-lightning==1.6.5
+huggingface_hub
+taming-transformers-rom1504
+carvekit-colab
+einops
+torchmetrics
+kornia
+webdataset
+lovely-numpy
+lovely-tensors
+imageio-ffmpeg
