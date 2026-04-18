@@ -54,9 +54,15 @@ def setup():
         run_command("git clone https://github.com/POSTECH-CVLab/InstaOrder")
         # Ensure checkpoint dir exists
         os.makedirs("InstaOrder/InstaOrder_ckpt", exist_ok=True)
-        # Placeholder for downloading InstaOrder weights
-        # Note: Users might need to download manually via Google Drive link usually provided by POSTECH-CVLab.
-        print("\n[NOTE] Please ensure InstaOrder_InstaOrderNet_od.pth.tar is placed in InstaOrder/InstaOrder_ckpt/")
+        # Download InstaOrder weights from their official Google Drive link
+        print("[Setup] Downloading InstaOrder weights (this might take a while, ~3.5GB)...")
+        run_command("pip install -q gdown")
+        run_command("gdown --id 1_GEmCmofLSkJZnidfp4vsQb2Nqq5aqBU -O InstaOrder_ckpt.zip")
+        print("[Setup] Unzipping InstaOrder weights...")
+        run_command("unzip -q InstaOrder_ckpt.zip")
+        run_command("mv InstaOrder_ckpt/InstaOrder_InstaOrderNet_od.pth.tar InstaOrder/InstaOrder_ckpt/")
+        # Clean up
+        run_command("rm -rf InstaOrder_ckpt.zip InstaOrder_ckpt")
 
     # 5. LISA (VLM Segmenter)
     if not os.path.exists("LISA"):
