@@ -33,7 +33,6 @@ def setup():
     # 2. Grounding DINO + SAM
     if not os.path.exists("Grounded-Segment-Anything"):
         run_command("git clone https://github.com/IDEA-Research/Grounded-Segment-Anything")
-        run_command("cd Grounded-Segment-Anything && pip install .")
         run_command("cd Grounded-Segment-Anything && pip install ./segment_anything")
         run_command("cd Grounded-Segment-Anything && pip install ./GroundingDINO")
         
@@ -47,7 +46,7 @@ def setup():
         run_command("cd recognize-anything && pip install .")
         
         # Download checkpoint
-        run_command("wget -P recognize-anything https://github.com/xinyu1205/recognize-anything/releases/download/v1.0/ram_plus_swin_large_14m.pth")
+        run_command("wget -P recognize-anything https://huggingface.co/xinyu1205/recognize-anything-plus-model/resolve/main/ram_plus_swin_large_14m.pth")
 
     # 4. InstaOrder
     if not os.path.exists("InstaOrder"):
@@ -67,7 +66,6 @@ def setup():
     # 5. LISA (VLM Segmenter)
     if not os.path.exists("LISA"):
         run_command("git clone https://github.com/dvlab-research/LISA.git")
-        run_command("cd LISA && pip install -r requirements.txt")
         # Replace LISA app.py with the paper's modified version
         run_command("wget -O LISA/app.py https://raw.githubusercontent.com/saraao/amodal/main/LISA/app.py")
 
