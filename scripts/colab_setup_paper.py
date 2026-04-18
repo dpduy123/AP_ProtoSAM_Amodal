@@ -33,9 +33,9 @@ def setup():
     # 2. Grounding DINO + SAM
     if not os.path.exists("Grounded-Segment-Anything"):
         run_command("git clone https://github.com/IDEA-Research/Grounded-Segment-Anything")
-        run_command("cd Grounded-Segment-Anything && pip install -q -e .")
-        run_command("cd Grounded-Segment-Anything && pip install -q -e segment_anything")
-        run_command("cd Grounded-Segment-Anything && pip install -q -e GroundingDINO")
+        run_command("cd Grounded-Segment-Anything && pip install .")
+        run_command("cd Grounded-Segment-Anything && pip install ./segment_anything")
+        run_command("cd Grounded-Segment-Anything && pip install ./GroundingDINO")
         
         # Download checkpoints
         run_command("wget -P Grounded-Segment-Anything https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth")
@@ -44,7 +44,7 @@ def setup():
     # 3. RAM++ (recognize-anything)
     if not os.path.exists("recognize-anything"):
         run_command("git clone https://github.com/xinyu1205/recognize-anything.git")
-        run_command("cd recognize-anything && pip install -q -e .")
+        run_command("cd recognize-anything && pip install .")
         
         # Download checkpoint
         run_command("wget -P recognize-anything https://github.com/xinyu1205/recognize-anything/releases/download/v1.0/ram_plus_swin_large_14m.pth")
