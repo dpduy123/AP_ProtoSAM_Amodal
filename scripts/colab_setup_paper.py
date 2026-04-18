@@ -66,8 +66,17 @@ def setup():
     # 5. LISA (VLM Segmenter)
     if not os.path.exists("LISA"):
         run_command("git clone https://github.com/dvlab-research/LISA.git")
+        # Fix collision with newer transformers which already have 'llava'
+        run_command("sed -i 's/AutoConfig.register(\"llava\", LlavaConfig)/AutoConfig.register(\"llava\", LlavaConfig, exist_ok=True)/' LISA/model/llava/model/language_model/llava_llama.py")
+        # Fix ImportError: cannot import name '_expand_mask' from 'transformers.models.bloom.modeling_bloom'
+        # We comment out the MPT import in __init__.py as we focus on Llama models
+        run_command("sed -i 's/from .language_model.llava_mpt/# from .language_model.llava_mpt/' LISA/model/llava/model/__init__.py")
+        # AND we patch the problematic file directly to be safe
+        run_command("sed -i 's/from transformers.models.bloom.modeling_bloom import _expand_mask/def _expand_mask(*args, **kwargs): pass\\n# from transformers.models.bloom.modeling_bloom import _expand_mask/' LISA/model/llava/model/language_model/mpt/hf_prefixlm_converter.py")
         # Replace LISA app.py with the paper's modified version
         run_command("wget -O LISA/app.py https://raw.githubusercontent.com/saraao/amodal/main/LISA/app.py")
+        # Fix: Redirect local model path to Hugging Face ID so it downloads automatically
+        run_command("sed -i 's|\"./LISA-13B-llama2-v1\"|\"xinlai/LISA-13B-llama2-v1\"|g' LISA/app.py")
 
     print("\n=== Setup Complete ===")
     print("To run LISA server in background (requires ~26GB VRAM alone):")
