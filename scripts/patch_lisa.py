@@ -89,20 +89,21 @@ def main():
     else:
         print("[patch] ⚠️  app.py: not found, skipping")
 
-    # ── Patch 5: llava_arch.py — handle attention_mask=None ──────────────
+    # ── Patch 5: llava_arch.py — completely neuter attention_mask crash ──
     llava_arch_py = base / "model/llava/model/llava_arch.py"
     if llava_arch_py.exists():
         content = llava_arch_py.read_text()
+        # Nuke the torch.ones(...) assignment that crashes
         new_content = re.sub(
-            r"if\s*\(\s*past_key_values is not None\s*and vision_tower is not None",
-            "if (attention_mask is not None and past_key_values is not None and vision_tower is not None",
+            r"attention_mask\s*=\s*torch\.ones\([\s\S]*?device=attention_mask\.device,\s*\)",
+            "pass  # attention_mask = torch.ones removed to fix NoneType bug",
             content
         )
         if new_content != content:
             llava_arch_py.write_text(new_content)
-            print("[patch] ✅ llava_arch.py: attention_mask=None fix applied")
+            print("[patch] ✅ llava_arch.py: attention_mask torch.ones nuked")
         else:
-            print("[patch] ⚠️  llava_arch.py: attention_mask=None pattern not found")
+            print("[patch] ⚠️  llava_arch.py: torch.ones block not found")
 
 
 if __name__ == "__main__":
