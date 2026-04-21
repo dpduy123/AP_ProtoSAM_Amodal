@@ -105,6 +105,22 @@ def main():
         else:
             print("[patch] ⚠️  llava_arch.py: torch.ones block not found")
 
+    # ── Patch 6: LISA.py — fix transformers>=4.36 use_cache crash ────────
+    lisa_py = base / "model/LISA.py"
+    if lisa_py.exists():
+        content = lisa_py.read_text()
+        if "use_cache=False" not in content:
+            new_content = re.sub(
+                r"(return_dict_in_generate=True,?)",
+                r"\1\n                use_cache=False,",
+                content
+            )
+            if new_content != content:
+                lisa_py.write_text(new_content)
+                print("[patch] ✅ LISA.py: use_cache=False fix applied")
+            else:
+                print("[patch] ⚠️  LISA.py: return_dict_in_generate not found")
+
 
 if __name__ == "__main__":
     main()
