@@ -89,6 +89,18 @@ def main():
     else:
         print("[patch] ⚠️  app.py: not found, skipping")
 
+    # ── Patch 5: llava_arch.py — handle attention_mask=None ──────────────
+    patch(
+        str(base / "model/llava/model/llava_arch.py"),
+        [
+            (
+                "if (\n                past_key_values is not None\n                and vision_tower is not None",
+                "if (\n                attention_mask is not None\n                and past_key_values is not None\n                and vision_tower is not None"
+            )
+        ],
+        "attention_mask=None fix"
+    )
+
 
 if __name__ == "__main__":
     main()
