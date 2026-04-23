@@ -39,7 +39,7 @@ class PipelineConfig:
     instaorder_input_size: int = 384
 
     # ── Stable Diffusion v2 Inpainting ──
-    sd_model_id: str = "stabilityai/stable-diffusion-2-inpainting"
+    sd_model_id: str = "sd2-community/stable-diffusion-2-inpainting"
     sd_target_size: int = 512
 
     # ── CLIP ──
