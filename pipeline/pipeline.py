@@ -94,6 +94,8 @@ class AmodalPipeline:
         
         inpaint_result = {
             "blended_crop": blended_crop,
+            "amodal_mask_crop": amodal_mask,
+            "prompt_used": prompt_text,
             "iter_count": 0
         }
             
@@ -101,31 +103,5 @@ class AmodalPipeline:
         self.inpainter.unload_model()
         self.occlusion.unload_model()
         
-        # Stage 6: Alpha Blending
-        amodal_pil = inpaint_result["amodal_completion"]
-        amodal_mask = inpaint_result["amodal_mask"]
-        cx_min, cx_max, cy_min, cy_max = inpaint_result["crop_region"][:4]
-        
-        # Reconstruct full-size orig RGBA
-        crop_orig = img_array[cx_min:cx_max, cy_min:cy_max]
-        crop_vis_mask = visible_mask[cx_min:cx_max, cy_min:cy_max]
-        orig_rgba = np.zeros((*crop_orig.shape[:2], 4), dtype=np.uint8)
-        orig_rgba[:,:,:3] = crop_orig
-        orig_rgba[:,:,3] = crop_vis_mask.astype(np.uint8) * 255
-        
-        # Reconstruct amodal RGBA
-        amodal_array = np.array(amodal_pil)
-        amodal_rgba = np.zeros((amodal_array.shape[0], amodal_array.shape[1], 4), dtype=np.uint8)
-        amodal_rgba[:,:,:3] = amodal_array
-        amodal_rgba[:,:,3] = amodal_mask.astype(np.uint8) * 255
-        
-        blended_crop = self.blender.blend(orig_rgba, amodal_rgba)
-        blended_pil = Image.fromarray(blended_crop)
-        
         # Save or return
-        return {
-            "blended_crop": blended_pil,
-            "amodal_mask_crop": amodal_mask, 
-            "prompt_used": prompt_text,
-            "iter_count": inpaint_result["iter_count"]
-        }
+        return inpaint_result
