@@ -93,15 +93,15 @@ def main():
     llava_arch_py = base / "model/llava/model/llava_arch.py"
     if llava_arch_py.exists():
         content = llava_arch_py.read_text()
-        # Using a highly robust RegEx pattern that captures the 'if' condition 
-        # and replaces only the 'attention_mask = torch.ones' block with 'pass'.
-        pattern = r"(if\s*\([\s\S]*?input_ids\.shape\[1\]\s*==\s*1\s*\):\s*)attention_mask\s*=\s*torch\.ones\([\s\S]*?device\s*=\s*attention_mask\.device,?\s*\)"
+        # Using a universal RegEx pattern that captures ONLY the leading spaces 
+        # and the 'attention_mask = torch.ones' block, ignoring whatever 'if' condition is above it!
+        pattern = r"([ \t]*)attention_mask\s*=\s*torch\.ones\([\s\S]*?device\s*=\s*attention_mask\.device,?\s*\)"
         
         if re.search(pattern, content):
             new_content = re.sub(pattern, r"\1pass", content)
             if new_content != content:
                 llava_arch_py.write_text(new_content)
-                print("[patch] ✅ llava_arch.py: attention_mask torch.ones safely replaced with pass")
+                print("[patch] ✅ llava_arch.py: attention_mask torch.ones universally nuked")
         else:
             print("[patch] ⚠️  llava_arch.py: torch.ones block not found")
 
