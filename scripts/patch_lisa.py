@@ -93,27 +93,15 @@ def main():
     llava_arch_py = base / "model/llava/model/llava_arch.py"
     if llava_arch_py.exists():
         content = llava_arch_py.read_text()
-        if "attention_mask = torch.ones" in content:
-            lines = content.split("\n")
-            new_lines = []
-            skip = False
-            for line in lines:
-                if "attention_mask = torch.ones(" in line:
-                    skip = True
-                    # Replace the start of the exact line with pass and comment out the rest
-                    indent = line[:len(line) - len(line.lstrip())]
-                    new_lines.append(indent + "pass  # " + line.lstrip())
-                    continue
-                if skip:
-                    new_lines.append("# " + line)
-                    if ")" in line and ("device=" in line or line.strip() == ")"):
-                        skip = False
-                else:
-                    new_lines.append(line)
-            new_content = "\n".join(new_lines)
+        # Using a highly robust RegEx pattern that captures the 'if' condition 
+        # and replaces only the 'attention_mask = torch.ones' block with 'pass'.
+        pattern = r"(if\s*\([\s\S]*?input_ids\.shape\[1\]\s*==\s*1\s*\):\s*)attention_mask\s*=\s*torch\.ones\([\s\S]*?device\s*=\s*attention_mask\.device,?\s*\)"
+        
+        if re.search(pattern, content):
+            new_content = re.sub(pattern, r"\1pass", content)
             if new_content != content:
                 llava_arch_py.write_text(new_content)
-                print("[patch] ✅ llava_arch.py: attention_mask torch.ones safely commented out")
+                print("[patch] ✅ llava_arch.py: attention_mask torch.ones safely replaced with pass")
         else:
             print("[patch] ⚠️  llava_arch.py: torch.ones block not found")
 
