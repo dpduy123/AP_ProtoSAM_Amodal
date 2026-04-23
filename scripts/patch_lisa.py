@@ -93,9 +93,8 @@ def main():
     llava_arch_py = base / "model/llava/model/llava_arch.py"
     if llava_arch_py.exists():
         content = llava_arch_py.read_text()
-        # Nuke the torch.ones(...) assignment that crashes
         new_content = re.sub(
-            r"attention_mask\s*=\s*torch\.ones\([\s\S]*?device=attention_mask\.device,\s*\)",
+            r"attention_mask\s*=\s*torch\.ones\([\s\S]*?device=attention_mask\.device,?\s*\)",
             "pass  # attention_mask = torch.ones removed to fix NoneType bug",
             content
         )
