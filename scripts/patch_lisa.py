@@ -94,14 +94,26 @@ def main():
     if llava_arch_py.exists():
         content = llava_arch_py.read_text()
         if "attention_mask = torch.ones" in content:
-            idx1 = content.find("attention_mask = torch.ones")
-            idx2 = content.find("device=attention_mask.device", idx1)
-            if idx2 != -1:
-                idx3 = content.find(")", idx2)
-                if idx3 != -1:
-                    new_content = content[:idx1] + "pass  # attention_mask torch.ones nuked" + content[idx3+1:]
-                    llava_arch_py.write_text(new_content)
-                    print("[patch] ✅ llava_arch.py: attention_mask torch.ones nuked")
+            lines = content.split("\n")
+            new_lines = []
+            skip = False
+            for line in lines:
+                if "attention_mask = torch.ones(" in line:
+                    skip = True
+                    # Replace the start of the exact line with pass and comment out the rest
+                    indent = line[:len(line) - len(line.lstrip())]
+                    new_lines.append(indent + "pass  # " + line.lstrip())
+                    continue
+                if skip:
+                    new_lines.append("# " + line)
+                    if ")" in line and ("device=" in line or line.strip() == ")"):
+                        skip = False
+                else:
+                    new_lines.append(line)
+            new_content = "\n".join(new_lines)
+            if new_content != content:
+                llava_arch_py.write_text(new_content)
+                print("[patch] ✅ llava_arch.py: attention_mask torch.ones safely commented out")
         else:
             print("[patch] ⚠️  llava_arch.py: torch.ones block not found")
 
