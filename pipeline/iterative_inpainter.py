@@ -73,8 +73,8 @@ class IterativeInpainter:
         H, W = image.shape[:2]
         
         # Base background image for isolating the target (Eq. 5)
-        bg_img_pil = Image.open(self.config.clean_bkgd_image).convert("RGB")
-        bg_array = np.array(bg_img_pil)
+        # We generate a generic gray background instead of loading an external file
+        bg_array = np.full((H, W, 3), 128, dtype=np.uint8)
         
         # 1. Canvas System: Create 6x expanded canvas (to allow outpainting)
         mult = self.config.canvas_multiplier
