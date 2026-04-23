@@ -79,20 +79,24 @@ class AmodalPipeline:
         self.prompt._model = None
         torch.cuda.empty_cache()
         
-        # Stage 5: Iterative Inpainting
-        inpaint_result = self.inpainter.inpaint(
-            image=img_array,
-            visible_mask=visible_mask,
-            occ_mask=occ_mask,
-            prompt=prompt_text,
-            scene_analyzer=self.scene,
-            occlusion_analyzer=self.occlusion,
-            target_class=text_query,
-            tags=scene.tags
-        )
+        # Stage 5: Iterative Inpainting (BYPASSED AS REQUESTED)
+        print("\n[Pipeline] Bypassing SD2 Inpainting, outputting raw Amodal Mask (Visible + Occluded)...")
+        amodal_mask = visible_mask | occ_mask
         
-        if not inpaint_result:
-            raise ValueError("Inpainting failed to produce amodal result.")
+        # Create a visual representation (white mask on black background)
+        amodal_vis = np.zeros_like(img_array)
+        amodal_vis[amodal_mask] = [255, 255, 255] # White for amodal shape
+        
+        # Overlay original visible textures for better visualization
+        amodal_vis[visible_mask] = img_array[visible_mask]
+        
+        from PIL import Image
+        blended_crop = Image.fromarray(amodal_vis).convert("RGBA")
+        
+        inpaint_result = {
+            "blended_crop": blended_crop,
+            "iter_count": 0
+        }
             
         # Clean up heavy models
         self.inpainter.unload_model()
