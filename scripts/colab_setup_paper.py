@@ -34,7 +34,8 @@ def setup():
     if not os.path.exists("Grounded-Segment-Anything"):
         run_command("git clone https://github.com/IDEA-Research/Grounded-Segment-Anything")
         run_command("cd Grounded-Segment-Anything && pip install -e ./segment_anything")
-        run_command("cd Grounded-Segment-Anything && export AM_I_DOCKER=False && export BUILD_WITH_CUDA=0 && pip install --no-build-isolation -e ./GroundingDINO")
+        # Use pre-built wheel from PyPI (source build fails on numpy 2.0)
+        run_command("pip install groundingdino-py")
         
         # Download checkpoints
         run_command("wget -P Grounded-Segment-Anything https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth")
@@ -85,7 +86,7 @@ def setup():
     # Apply safe patches (AutoConfig, MPT import, model path — but NOT attention_mask)
     run_command("python scripts/patch_lisa.py")
 
-    # 6. Patch LISA app.py for gradio 4.x (Python 3.12 requires gradio>=4.13)
+    # 6. Patch LISA app.py for gradio 4.x + Colab
     lisa_app = "LISA/app.py"
     if os.path.exists(lisa_app):
         with open(lisa_app, 'r') as f:
@@ -95,14 +96,14 @@ def setup():
         if 'gr.Numpy' in content:
             content = content.replace('gr.Numpy', 'gr.JSON')
             patched = True
-        # demo.queue() no longer accepts arguments in gradio 4.x
-        if 'demo.queue()' in content:
-            # Already fine, no args
-            pass
+        # Colab blocks localhost → need share=True
+        if 'demo.launch()' in content:
+            content = content.replace('demo.launch()', 'demo.launch(share=True)')
+            patched = True
         if patched:
             with open(lisa_app, 'w') as f:
                 f.write(content)
-            print("[Setup] ✅ Patched LISA app.py for gradio 4.x (gr.Numpy → gr.JSON)")
+            print("[Setup] ✅ Patched LISA app.py for gradio 4.x + Colab (share=True)")
 
     # 7. Patch InstaOrder for numpy 1.26 (np.int removed)
     instaorder_inference = "InstaOrder/inference.py"
