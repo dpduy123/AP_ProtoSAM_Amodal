@@ -89,14 +89,25 @@ def main():
     else:
         print("[patch] ⚠️  app.py: not found, skipping")
 
-    # ── Patch 5: llava_arch.py — attention_mask fix ────────────────────────
-    # NOTE: With transformers==4.31.0 (pinned in requirements_paper.txt),
-    # attention_mask is NEVER None inside prepare_inputs_labels_for_multimodal.
-    # The torch.ones crash only occurs with transformers>=4.36.
-    # Therefore, NO patch is needed here. The previous regex that replaced
-    # the attention_mask block with 'pass' DESTROYED LISA's mask quality,
-    # causing blocky 32x32 patch-level outputs.
-    print("[patch] ℹ️  llava_arch.py: no patch needed (transformers==4.31.0 is safe)")
+    # ── Patch 5: llava_arch.py — fix attention_mask.device crash ────────────
+    # BUG: When attention_mask is None (transformers>=4.36), LISA does:
+    #   attention_mask = torch.ones(..., device=attention_mask.device)
+    # This crashes because attention_mask IS None → .device fails.
+    # FIX: Replace attention_mask.device → input_ids.device
+    # This preserves LISA's full attention mechanism (pixel-precise masks).
+    llava_arch_py = base / "model/llava/model/llava_arch.py"
+    if llava_arch_py.exists():
+        content = llava_arch_py.read_text()
+        old = "device=attention_mask.device"
+        new = "device=input_ids.device"
+        if old in content:
+            content = content.replace(old, new)
+            llava_arch_py.write_text(content)
+            print("[patch] ✅ llava_arch.py: attention_mask.device → input_ids.device")
+        elif new in content:
+            print("[patch] ℹ️  llava_arch.py: already patched")
+        else:
+            print("[patch] ⚠️  llava_arch.py: pattern not found")
 
     # ── Patch 6: LISA.py — fix transformers>=4.36 use_cache crash ────────
     lisa_py = base / "model/LISA.py"
