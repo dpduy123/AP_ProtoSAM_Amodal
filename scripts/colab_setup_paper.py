@@ -33,8 +33,8 @@ def setup():
     # 2. Grounding DINO + SAM
     if not os.path.exists("Grounded-Segment-Anything"):
         run_command("git clone https://github.com/IDEA-Research/Grounded-Segment-Anything")
-        run_command("cd Grounded-Segment-Anything && pip install ./segment_anything")
-        run_command("cd Grounded-Segment-Anything && BUILD_WITH_CUDA=0 pip install ./GroundingDINO")
+        run_command("cd Grounded-Segment-Anything && pip install -e ./segment_anything")
+        run_command("cd Grounded-Segment-Anything && export AM_I_DOCKER=False && export BUILD_WITH_CUDA=0 && pip install --no-build-isolation -e ./GroundingDINO")
         
         # Download checkpoints
         run_command("wget -P Grounded-Segment-Anything https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth")
