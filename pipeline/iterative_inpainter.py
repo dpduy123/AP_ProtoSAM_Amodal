@@ -37,10 +37,11 @@ class IterativeInpainter:
         self._model = StableDiffusionInpaintPipeline.from_pretrained(
             self.config.sd_model_id,
             torch_dtype=torch.float16,
-        ).to(self.device)
+        )
+        self._model.enable_model_cpu_offload()
         self._model.enable_attention_slicing()
         self._loaded = True
-        print("[IterativeInpainter] SD2 Inpainting loaded.")
+        print("[IterativeInpainter] SD2 Inpainting loaded with CPU offload.")
 
     def unload_model(self):
         """Free GPU memory."""
