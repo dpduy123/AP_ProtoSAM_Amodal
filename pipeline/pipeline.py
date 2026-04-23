@@ -90,7 +90,6 @@ class AmodalPipeline:
         # Overlay original visible textures for better visualization
         amodal_vis[visible_mask] = img_array[visible_mask]
         
-        from PIL import Image
         blended_crop = Image.fromarray(amodal_vis).convert("RGBA")
         
         inpaint_result = {
