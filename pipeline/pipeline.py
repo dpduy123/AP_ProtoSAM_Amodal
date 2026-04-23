@@ -95,6 +95,7 @@ class AmodalPipeline:
         inpaint_result = {
             "blended_crop": blended_crop,
             "amodal_mask_crop": amodal_mask,
+            "visible_mask": visible_mask,
             "prompt_used": prompt_text,
             "iter_count": 0
         }
