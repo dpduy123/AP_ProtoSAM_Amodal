@@ -65,11 +65,14 @@ class VLMSegmenter:
 
         # Check cache first
         if use_cache and cache_path.exists():
-            print(f"[VLMSegmenter] Loading cached mask for '{img_basename}'")
-            with open(cache_path, "rb") as f:
-                cached = pickle.load(f)
-            if text_query in cached:
-                return cached[text_query]
+            try:
+                print(f"[VLMSegmenter] Loading cached mask for '{img_basename}'")
+                with open(cache_path, "rb") as f:
+                    cached = pickle.load(f)
+                if text_query in cached:
+                    return cached[text_query]
+            except Exception as e:
+                print(f"[VLMSegmenter] Cache load failed ({e}), re-querying LISA...")
 
         # Query LISA server
         print(f"[VLMSegmenter] Querying LISA: '{text_query}' on '{img_basename}'...")
@@ -94,8 +97,11 @@ class VLMSegmenter:
         if use_cache:
             cached = {}
             if cache_path.exists():
-                with open(cache_path, "rb") as f:
-                    cached = pickle.load(f)
+                try:
+                    with open(cache_path, "rb") as f:
+                        cached = pickle.load(f)
+                except Exception:
+                    cached = {}
             cached[text_query] = mask
             with open(cache_path, "wb") as f:
                 pickle.dump(cached, f)
