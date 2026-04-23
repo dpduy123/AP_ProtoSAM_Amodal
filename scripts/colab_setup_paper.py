@@ -85,7 +85,26 @@ def setup():
     # Apply safe patches (AutoConfig, MPT import, model path — but NOT attention_mask)
     run_command("python scripts/patch_lisa.py")
 
-    # 6. Patch InstaOrder for numpy 1.24 (np.int deprecated but not yet removed)
+    # 6. Patch LISA app.py for gradio 4.x (Python 3.12 requires gradio>=4.13)
+    lisa_app = "LISA/app.py"
+    if os.path.exists(lisa_app):
+        with open(lisa_app, 'r') as f:
+            content = f.read()
+        patched = False
+        # gr.Numpy was removed in gradio 4.x → use gr.JSON
+        if 'gr.Numpy' in content:
+            content = content.replace('gr.Numpy', 'gr.JSON')
+            patched = True
+        # demo.queue() no longer accepts arguments in gradio 4.x
+        if 'demo.queue()' in content:
+            # Already fine, no args
+            pass
+        if patched:
+            with open(lisa_app, 'w') as f:
+                f.write(content)
+            print("[Setup] ✅ Patched LISA app.py for gradio 4.x (gr.Numpy → gr.JSON)")
+
+    # 7. Patch InstaOrder for numpy 1.26 (np.int removed)
     instaorder_inference = "InstaOrder/inference.py"
     if os.path.exists(instaorder_inference):
         run_command(f"sed -i 's/np\\.int\\b/int/g' {instaorder_inference}")

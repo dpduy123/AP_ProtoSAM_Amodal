@@ -83,12 +83,21 @@ class VLMSegmenter:
             api_name="/predict"
         )
 
-        # Parse result — LISA returns (output_image_path, mask_json_path)
+        # Parse result — LISA returns (output_image_path, mask_data, text_output)
+        # gradio 3.x: result[1] is a filepath to JSON
+        # gradio 4.x with gr.JSON: result[1] is a dict directly
         output_image_path = result[0]
-        mask_json_path = result[1]
+        mask_raw = result[1]
 
-        with open(mask_json_path, "r") as f:
-            mask_data = json.load(f)
+        if isinstance(mask_raw, dict):
+            # gradio 4.x: gr.JSON returns dict directly
+            mask_data = mask_raw
+        elif isinstance(mask_raw, str):
+            # gradio 3.x: returns filepath to JSON file
+            with open(mask_raw, "r") as f:
+                mask_data = json.load(f)
+        else:
+            raise ValueError(f"Unexpected LISA response type: {type(mask_raw)}")
 
         mask = np.array(mask_data["data"], dtype=bool)
         print(f"[VLMSegmenter] Mask obtained: {mask.shape}, area={mask.sum()} px")
