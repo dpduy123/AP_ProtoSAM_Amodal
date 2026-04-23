@@ -79,30 +79,51 @@ class AmodalPipeline:
         self.prompt._model = None
         torch.cuda.empty_cache()
         
-        # Stage 5: Iterative Inpainting (BYPASSED AS REQUESTED)
-        print("\n[Pipeline] Bypassing SD2 Inpainting, outputting raw Amodal Mask (Visible + Occluded)...")
-        amodal_mask = visible_mask | occ_mask
+        # Stage 5: Iterative Inpainting (Paper §3.4)
+        inpaint_result = self.inpainter.inpaint(
+            image=img_array,
+            visible_mask=visible_mask,
+            occ_mask=occ_mask,
+            prompt=prompt_text,
+            scene_analyzer=self.scene,
+            occlusion_analyzer=self.occlusion,
+            target_class=text_query,
+            tags=scene.tags
+        )
         
-        # Create a visual representation (white mask on black background)
-        amodal_vis = np.zeros_like(img_array)
-        amodal_vis[amodal_mask] = [255, 255, 255] # White for amodal shape
-        
-        # Overlay original visible textures for better visualization
-        amodal_vis[visible_mask] = img_array[visible_mask]
-        
-        blended_crop = Image.fromarray(amodal_vis).convert("RGBA")
-        
-        inpaint_result = {
-            "blended_crop": blended_crop,
-            "amodal_mask_crop": amodal_mask,
-            "visible_mask": visible_mask,
-            "prompt_used": prompt_text,
-            "iter_count": 0
-        }
+        if not inpaint_result:
+            raise ValueError("Inpainting failed to produce amodal result.")
             
         # Clean up heavy models
         self.inpainter.unload_model()
         self.occlusion.unload_model()
         
+        # Stage 6: Alpha Blending (Paper §3.4, Eq. 8)
+        amodal_pil = inpaint_result["amodal_completion"]
+        amodal_mask = inpaint_result["amodal_mask"]
+        cx_min, cx_max, cy_min, cy_max = inpaint_result["crop_region"][:4]
+        
+        # Reconstruct full-size orig RGBA
+        crop_orig = img_array[cx_min:cx_max, cy_min:cy_max]
+        crop_vis_mask = visible_mask[cx_min:cx_max, cy_min:cy_max]
+        orig_rgba = np.zeros((*crop_orig.shape[:2], 4), dtype=np.uint8)
+        orig_rgba[:,:,:3] = crop_orig
+        orig_rgba[:,:,3] = crop_vis_mask.astype(np.uint8) * 255
+        
+        # Reconstruct amodal RGBA
+        amodal_array = np.array(amodal_pil)
+        amodal_rgba = np.zeros((amodal_array.shape[0], amodal_array.shape[1], 4), dtype=np.uint8)
+        amodal_rgba[:,:,:3] = amodal_array
+        amodal_rgba[:,:,3] = amodal_mask.astype(np.uint8) * 255
+        
+        blended_crop = self.blender.blend(orig_rgba, amodal_rgba)
+        blended_pil = Image.fromarray(blended_crop)
+        
         # Save or return
-        return inpaint_result
+        return {
+            "blended_crop": blended_pil,
+            "visible_mask": visible_mask,
+            "amodal_mask_crop": amodal_mask, 
+            "prompt_used": prompt_text,
+            "iter_count": inpaint_result["iter_count"]
+        }

@@ -64,24 +64,37 @@ def setup():
         run_command("rm -rf InstaOrder_ckpt.zip InstaOrder_ckpt")
 
     # 5. LISA (VLM Segmenter)
+    # If LISA exists but was patched with the old destructive attention_mask fix,
+    # re-clone it to get a clean copy.
+    if os.path.exists("LISA"):
+        # Check if the destructive patch was applied
+        llava_arch = "LISA/model/llava/model/llava_arch.py"
+        if os.path.exists(llava_arch):
+            with open(llava_arch, 'r') as f:
+                content = f.read()
+            if 'attention_mask' not in content or 'torch.ones' not in content:
+                print("[Setup] Detected old destructive LISA patch. Re-cloning fresh LISA...")
+                run_command("rm -rf LISA")
+
     if not os.path.exists("LISA"):
         run_command("git clone https://github.com/dvlab-research/LISA.git")
-        # Fix collision with newer transformers which already have 'llava'
-        run_command("sed -i 's/AutoConfig.register(\"llava\", LlavaConfig)/AutoConfig.register(\"llava\", LlavaConfig, exist_ok=True)/' LISA/model/llava/model/language_model/llava_llama.py")
-        # Fix ImportError: cannot import name '_expand_mask' from 'transformers.models.bloom.modeling_bloom'
-        # We comment out the MPT import in __init__.py as we focus on Llama models
-        run_command("sed -i 's/from .language_model.llava_mpt/# from .language_model.llava_mpt/' LISA/model/llava/model/__init__.py")
-        # AND we patch the problematic file directly to be safe
-        run_command("sed -i 's/from transformers.models.bloom.modeling_bloom import _expand_mask/def _expand_mask(*args, **kwargs): pass\\n# from transformers.models.bloom.modeling_bloom import _expand_mask/' LISA/model/llava/model/language_model/mpt/hf_prefixlm_converter.py")
         # Replace LISA app.py with the paper's modified version
+        # (adds pred_mask return at line 310 and gr.Numpy output at line 322)
         run_command("wget -O LISA/app.py https://raw.githubusercontent.com/saraao/amodal/main/LISA/app.py")
-        # Fix: Redirect local model path to Hugging Face ID so it downloads automatically
-        run_command("sed -i 's|\"./LISA-13B-llama2-v1\"|\"xinlai/LISA-13B-llama2-v1\"|g' LISA/app.py")
+    
+    # Apply safe patches (AutoConfig, MPT import, model path — but NOT attention_mask)
+    run_command("python scripts/patch_lisa.py")
+
+    # 6. Patch InstaOrder for numpy 1.24 (np.int deprecated but not yet removed)
+    instaorder_inference = "InstaOrder/inference.py"
+    if os.path.exists(instaorder_inference):
+        run_command(f"sed -i 's/np\\.int\\b/int/g' {instaorder_inference}")
+        print("[Setup] Patched InstaOrder np.int -> int")
 
     print("\n=== Setup Complete ===")
-    print("To run LISA server in background (requires ~26GB VRAM alone):")
-    print("  cd LISA && python app.py &")
-    print("Then in a separate notebook cell, load your masks or run pipeline.")
+    print("To run LISA server:")
+    print("  cd LISA && python app.py --version xinlai/LISA-13B-llama2-v1 --precision fp16 --load_in_4bit &")
+    print("Then in a separate notebook cell, run the pipeline.")
 
 if __name__ == "__main__":
     setup()

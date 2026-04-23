@@ -155,6 +155,11 @@ class SceneAnalyzer:
         Re-segment an inpainted image during iterative inpainting.
         Used inside the iteration loop to detect amodal mask expansion.
         """
+        # Models may have been unloaded after Stage 2 to free VRAM for SD2.
+        # Reload them here since re_segment is called inside the inpainting loop.
+        if not self._loaded or self._gdino_model is None:
+            self.load_models()
+
         img_tensor = self._transform_image(image_pil)
         img_array = np.array(image_pil)
 
