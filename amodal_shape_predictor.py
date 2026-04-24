@@ -57,6 +57,20 @@ class Pix2GestaltPredictor:
             print("[AmodalShapePredictor] Falling back to Heuristic Predictor.")
             self.model = None
 
+    def cleanup(self):
+        """
+        Explicitly free Pix2Gestalt LDM from GPU memory.
+        """
+        print("[AmodalShapePredictor] Freeing Pix2Gestalt (15GB+)...")
+        if self.model is not None:
+            del self.model
+            self.model = None
+        
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     def predict_full_shape(self, image: np.ndarray, visible_mask: np.ndarray) -> np.ndarray:
         """
         Args:

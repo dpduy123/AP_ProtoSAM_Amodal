@@ -65,17 +65,35 @@ class AmodalCompleter:
         self._pipe.to(self.device)
         self._pipe.set_progress_bar_config(disable=True)
 
-        # ── VRAM optimizations (Colab T4/A100) ──
-        if self.device == "cuda":
-            self._pipe.enable_attention_slicing("max")   # ~30% less VRAM
-            self._pipe.enable_vae_slicing()               # VAE decode in slices
-            try:
-                self._pipe.enable_xformers_memory_efficient_attention()
-                print("[AmodalCompleter] xformers enabled (faster + less VRAM)")
-            except Exception:
-                print("[AmodalCompleter] xformers not available, using attention slicing")
+    def cleanup(self):
+        """
+        Explicitly removes all models from GPU memory.
+        Use this when done with the pipeline to free ~25GB VRAM.
+        """
+        print("[AmodalCompleter] Cleaning up models and freeing VRAM...")
+        
+        if hasattr(self, '_shape_predictor'):
+            self._shape_predictor.cleanup()
+            del self._shape_predictor
+            
+        if hasattr(self, '_vlm'):
+            del self._vlm
 
-        print("[AmodalCompleter] Loading CLIP model...")
+        if self._pipe is not None:
+            del self._pipe
+            self._pipe = None
+            
+        if self._clip_model is not None:
+            del self._clip_model
+            self._clip_model = None
+            
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        print("[AmodalCompleter] Cleanup complete.")
+
+    # ── Model loading ──────────────────────────────────────────────────────
         from transformers import CLIPModel, CLIPProcessor
 
         clip_dtype = torch.float16 if self.device == "cuda" else torch.float32
@@ -160,6 +178,10 @@ class AmodalCompleter:
 
         # Step 6: Build RGBA output
         rgba = self._finalize_rgba(blended_rgb, amodal_mask, H, W)
+
+        # Final Cleanup to prevent OOM on subsequent images
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
 
         return {
             "input_image": image,
@@ -460,6 +482,8 @@ class AmodalCompleter:
             images=[crop_pil] * len(candidates),
             return_tensors="pt",
             padding=True,
+            truncation=True,
+            max_length=77,
         ).to(self.device)
 
         with torch.no_grad():
