@@ -27,7 +27,7 @@ import cv2
 from amodal_shape_predictor import Pix2GestaltPredictor
 from vlm_reasoner import VLMReasoner
 from dataclasses import dataclass
-
+from PIL import Image
 
 class AmodalCompleter:
 
