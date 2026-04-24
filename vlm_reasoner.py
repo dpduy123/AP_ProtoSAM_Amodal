@@ -3,6 +3,7 @@ from PIL import Image
 import numpy as np
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
+import re
 
 class VLMReasoner:
     def __init__(self, model_id="Qwen/Qwen3-VL-4B-Instruct", device="cuda"):
@@ -68,3 +69,41 @@ class VLMReasoner:
         )[0]
 
         return output_text.strip()
+
+    @torch.no_grad()
+    def get_missing_region_boxes(self, image_np):
+        """
+        Uses Qwen-VL's grounding capability to find bounding boxes of occluded/missing parts.
+        Returns: List of [ymin, xmin, ymax, xmax] in normalized coordinates (0-1000).
+        """
+        if self.model is None: return []
+
+        image_pil = Image.fromarray(image_np)
+        prompt = "Identify the locations of the hidden or missing parts of the main object in this image. Output the bounding boxes in the format [ymin, xmin, ymax, xmax]."
+        
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image_pil},
+                    {"type": "text", "text": prompt}
+                ],
+            }
+        ]
+
+        text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        image_inputs, _ = process_vision_info(messages)
+        inputs = self.processor(text=[text], images=image_inputs, padding=True, return_tensors="pt").to(self.device)
+
+        generated_ids = self.model.generate(**inputs, max_new_tokens=200)
+        output_text = self.processor.batch_decode(generated_ids[:, inputs.input_ids.shape[1]:], skip_special_tokens=True)[0]
+
+        # Extract coordinates using regex: e.g., [123, 456, 789, 101]
+        boxes = []
+        pattern = r"\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\]"
+        matches = re.findall(pattern, output_text)
+        
+        for m in matches:
+            boxes.append([int(x) for x in m])
+        
+        return boxes

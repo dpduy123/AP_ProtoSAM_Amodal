@@ -17,6 +17,7 @@ diffusers==0.37.1
 transformers==5.0.0
 accelerate==1.13.0
 safetensors==0.7.0
+qwen_vl_utils==0.0.10
 
 # ── Image Processing ──
 opencv-python-headless==4.13.0.92

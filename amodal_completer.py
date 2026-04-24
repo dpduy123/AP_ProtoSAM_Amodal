@@ -19,11 +19,14 @@ Pipeline (follows CVPR 2025 paper):
 """
 
 import numpy as np
+from typing import Optional
+import json
+import os
 import torch
 import cv2
-from PIL import Image
-from typing import Optional
 from amodal_shape_predictor import Pix2GestaltPredictor
+from vlm_reasoner import VLMReasoner
+from dataclasses import dataclass
 
 
 class AmodalCompleter:
@@ -42,6 +45,9 @@ class AmodalCompleter:
         
         # Pix2Gestalt Shape Predictor
         self._shape_predictor = Pix2GestaltPredictor(device=self.device)
+        
+        # VLM Reasoner (Qwen3-VL-4B)
+        self._vlm = VLMReasoner(device=self.device)
         
         self._load_models(inpainting_model_id, clip_model_id)
 
@@ -105,6 +111,18 @@ class AmodalCompleter:
         """
         H, W = image.shape[:2]
 
+        # Step 0: Semantic Reasoning with VLM (The Brain)
+        print("[AmodalCompleter] Step 0: Reasoning with Qwen3-VL...")
+        vlm_guidance = self._vlm.reason_occlusion(image, visible_mask)
+        print(f"[VLM Reason]: {vlm_guidance}")
+        
+        # Output VLM reasoning to a JSON file for logging/inspection
+        try:
+            with open("text_prompt.json", "w", encoding="utf-8") as f:
+                json.dump({"vlm_reasoning": vlm_guidance}, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"[AmodalCompleter] Warning: Could not save text_prompt.json: {e}")
+
         # Step 1: Predict exact Amodal Mask (Shape) using Pix2Gestalt
         print("[AmodalCompleter] Step 1: Predicting amodal shape...")
         amodal_mask = self._shape_predictor.predict_full_shape(image, visible_mask)
@@ -119,11 +137,13 @@ class AmodalCompleter:
                 "input_image": image,
                 "visible_mask": visible_mask,
                 "amodal_mask": amodal_mask,
-                "inpainted_rgba": rgba
+                "inpainted_rgba": rgba,
+                "vlm_reasoning": vlm_guidance
             }
 
-        # Step 2: Select best inpainting prompt
-        prompt = self._select_prompt(image, visible_mask, text_query)
+        # Step 2: Select best inpainting prompt (Incorporate VLM guidance)
+        semantic_query = f"{text_query} {vlm_guidance}".strip()
+        prompt = self._select_prompt(image, visible_mask, semantic_query)
         prompt = f"{prompt}, centered, high quality, consistent lighting"
 
         # Step 3: Prepare inpainting target on perfectly clean neutral background
@@ -145,7 +165,8 @@ class AmodalCompleter:
             "input_image": image,
             "visible_mask": visible_mask,
             "amodal_mask": amodal_mask,
-            "inpainted_rgba": rgba
+            "inpainted_rgba": rgba,
+            "vlm_reasoning": vlm_guidance
         }
 
     def _finalize_rgba(self, image, amodal_mask, H, W):
