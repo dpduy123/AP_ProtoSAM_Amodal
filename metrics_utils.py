@@ -82,11 +82,17 @@ def calculate_feature_similarity(img1, img2, device="cuda"):
 
     inputs1 = _clip_processor(images=img1, return_tensors="pt").to(device)
     inputs2 = _clip_processor(images=img2, return_tensors="pt").to(device)
-    
+
     with torch.no_grad():
         feat1 = _clip_model.get_image_features(**inputs1)
         feat2 = _clip_model.get_image_features(**inputs2)
-        
+
+    # transformers 5.0.0+ returns BaseModelOutputWithPooling; pull out the tensor.
+    if not isinstance(feat1, torch.Tensor):
+        feat1 = feat1.pooler_output if feat1.pooler_output is not None else feat1.last_hidden_state[:, 0]
+    if not isinstance(feat2, torch.Tensor):
+        feat2 = feat2.pooler_output if feat2.pooler_output is not None else feat2.last_hidden_state[:, 0]
+
     cos = nn.CosineSimilarity(dim=1)
     return cos(feat1, feat2).item()
 

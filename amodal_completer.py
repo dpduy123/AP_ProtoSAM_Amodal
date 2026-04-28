@@ -174,14 +174,18 @@ class AmodalCompleter:
                 "final_score": None,
             }
 
-        # Fuse the two guidance signals: semantic prompt selection on the visible crop,
-        # conditioned on (text_query ⊕ vlm_guidance), produces P_s for the diffusion model.
-        semantic_query = f"{text_query} {vlm_guidance}".strip()
-        base_prompt = self._select_prompt(image, visible_mask, semantic_query)
+        # Fuse the two guidance signals via CLIP-verified Qwen reasoning.
+        base_prompt, clip_info = self._select_prompt(
+            image, visible_mask, qwen_text=vlm_guidance, user_query=text_query
+        )
         target_img, _ = self._prepare_target_image(image, visible_mask)
 
         # ── SYNTHESIS + SEMANTIC CRITIC LOOP (Stage 2 + Stage 3) ─────────
-        prompt = f"{base_prompt}, centered, high quality, consistent lighting"
+        sd_tok = AmodalCompleter._pipe.tokenizer
+        prompt = self._truncate_to_tokens(
+            f"{base_prompt}, centered, high quality, consistent lighting",
+            sd_tok, max_tokens=70,
+        )
         guidance_scale = 7.5
         num_inference_steps = 30
         critique_history: list[dict] = []
@@ -218,11 +222,12 @@ class AmodalCompleter:
                 break
 
             # Refinement: inject critic feedback into prompt and tighten guidance.
-            prompt = (
+            refined = (
                 f"{base_prompt}, addressing: {critique['feedback']}, "
                 f"photorealistic, anatomically correct, seamless texture, "
                 f"consistent lighting"
             )
+            prompt = self._truncate_to_tokens(refined, sd_tok, max_tokens=70)
             guidance_scale = min(guidance_scale + 1.5, 12.0)
             num_inference_steps = min(num_inference_steps + 10, 50)
 
@@ -232,6 +237,7 @@ class AmodalCompleter:
                 json.dump(
                     {
                         "vlm_reasoning": vlm_guidance,
+                        "clip_verification": clip_info,
                         "critique_history": [
                             {k: v for k, v in c.items() if k != "raw"}
                             for c in critique_history
@@ -251,6 +257,7 @@ class AmodalCompleter:
             "amodal_mask": amodal_mask,
             "inpainted_rgba": rgba,
             "vlm_reasoning": vlm_guidance,
+            "clip_verification": clip_info,
             "critique_history": critique_history,
             "final_score": critique_history[-1]["score"] if critique_history else None,
         }
@@ -517,56 +524,133 @@ class AmodalCompleter:
         occluder_mask = occluder_mask | (dilated_occ & edge_region)
         return occluder_mask
 
-    # ── Step 2: Prompt selection ───────────────────────────────────────────
+    # ── Step 2: CLIP verification of Qwen reasoning ────────────────────────
+
+    @staticmethod
+    def _truncate_words(text: str, max_words: int = 45) -> str:
+        """Word-level truncation (rough fallback)."""
+        words = text.split()
+        if len(words) <= max_words:
+            return text
+        return " ".join(words[:max_words])
+
+    @staticmethod
+    def _truncate_to_tokens(text: str, tokenizer, max_tokens: int = 70) -> str:
+        """
+        Token-accurate truncation using a HuggingFace tokenizer.
+        Caps at `max_tokens` (leaving room for BOS/EOS in 77-token CLIP encoders).
+        Falls back to word truncation if the tokenizer fails.
+        """
+        try:
+            ids = tokenizer(text, truncation=False, add_special_tokens=False).input_ids
+            if len(ids) <= max_tokens:
+                return text
+            return tokenizer.decode(ids[:max_tokens], skip_special_tokens=True)
+        except Exception:
+            return AmodalCompleter._truncate_words(text, max_words=max_tokens)
 
     def _select_prompt(
         self,
         image: np.ndarray,
         visible_mask: np.ndarray,
-        text_query: str,
-    ) -> str:
+        qwen_text: str,
+        user_query: str = "",
+    ) -> tuple[str, dict]:
         """
-        Use CLIP to select the best text descriptor for the visible object region.
-        Combines auto-generated tags with the user's text query.
+        Use CLIP to VERIFY (not replace) Qwen's reasoning.
+
+        Strategy:
+          1. Truncate Qwen text to fit 77-token CLIP limit.
+          2. Score Qwen text + a small set of generic fallbacks against the
+             cropped visible region.
+          3. Accept Qwen if its CLIP score is competitive with the best generic
+             label (within `margin`) AND above an absolute floor.
+          4. Otherwise fall back to the best generic label — treating the
+             Qwen output as hallucinated / off-topic for the visible region.
+
+        Returns: (prompt_for_SD, info_dict)
         """
-        # Crop visible region
         ys, xs = np.where(visible_mask)
         if len(xs) == 0:
-            return text_query or "object"
+            return user_query or "object", {"verified": False, "reason": "empty mask"}
 
+        # Crop visible region; mask non-target pixels to neutral gray.
         x1, y1, x2, y2 = xs.min(), ys.min(), xs.max(), ys.max()
-        crop = image[y1:y2+1, x1:x2+1].copy()
-
-        # Mask out non-target pixels
-        crop_mask = visible_mask[y1:y2+1, x1:x2+1]
-        crop[~crop_mask] = 128  # neutral gray background
-
+        crop = image[y1:y2 + 1, x1:x2 + 1].copy()
+        crop_mask = visible_mask[y1:y2 + 1, x1:x2 + 1]
+        crop[~crop_mask] = 128
         crop_pil = Image.fromarray(crop)
 
-        # Candidate descriptions: user query + generic tags
-        candidates = [
-            text_query,
-            "object", "item", "thing",
-            "person", "animal", "vehicle", "furniture",
-            "foreground object", "occluded object",
+        # Token-accurate truncation against CLIP's own tokenizer (77-token limit).
+        clip_tok = AmodalCompleter._clip_processor.tokenizer
+        qwen_short = self._truncate_to_tokens(qwen_text, clip_tok, max_tokens=70)
+
+        fallbacks = [
+            "object", "person", "animal", "vehicle", "furniture", "foreground object",
         ]
-        candidates = [c for c in candidates if c.strip()]
+        if user_query and user_query.strip():
+            fallbacks.insert(0, user_query.strip())
+        candidates = [qwen_short] + fallbacks
+        candidates = [c for c in candidates if c and c.strip()]
 
-        # CLIP similarity
+        # Tokenize text and process image SEPARATELY so we have full control over
+        # truncation. The joint CLIPProcessor call has been observed to skip
+        # length capping in transformers 5.0.0.
+        text_inputs = clip_tok(
+            candidates,
+            padding="max_length",
+            max_length=77,
+            truncation=True,
+            return_tensors="pt",
+        )
+        # Hard guarantee: any token tensor we forward must be ≤ 77 long.
+        if text_inputs["input_ids"].shape[1] > 77:
+            text_inputs = {k: v[:, :77] for k, v in text_inputs.items()}
+
+        image_inputs = AmodalCompleter._clip_processor.image_processor(
+            [crop_pil] * len(candidates),
+            return_tensors="pt",
+        )
+        clip_inputs = {
+            "input_ids": text_inputs["input_ids"].to(self.device),
+            "attention_mask": text_inputs["attention_mask"].to(self.device),
+            "pixel_values": image_inputs["pixel_values"].to(self.device),
+        }
+
         with torch.no_grad():
-            inputs = AmodalCompleter._clip_processor(
-                text=candidates, 
-                images=[crop_pil] * len(candidates), 
-                return_tensors="pt", 
-                padding=True
-            ).to(self.device)
-            outputs = AmodalCompleter._clip_model(**inputs)
-            image_feats = outputs.image_embeds[0:1]  # (1, D)
-            text_feats = outputs.text_embeds          # (N, D)
-            sims = (image_feats @ text_feats.T).squeeze(0)
-            best_idx = sims.argmax().item()
+            outputs = AmodalCompleter._clip_model(**clip_inputs)
+            sims = (outputs.image_embeds[0:1] @ outputs.text_embeds.T).squeeze(0)
+            sims_list = sims.detach().cpu().tolist()
 
-        return candidates[best_idx]
+        qwen_score = sims_list[0]
+        fallback_scores = sims_list[1:]
+        best_fb_idx = max(range(len(fallback_scores)), key=lambda i: fallback_scores[i])
+        best_fallback = candidates[1 + best_fb_idx]
+        best_fb_score = fallback_scores[best_fb_idx]
+
+        # Verification thresholds — cosine similarity in normalized CLIP space.
+        ABS_FLOOR = 0.18      # below this Qwen is deemed clearly off-topic
+        MARGIN = 0.03         # Qwen acceptable if at most 0.03 below best fallback
+
+        verified = (qwen_score >= ABS_FLOOR) and (qwen_score >= best_fb_score - MARGIN)
+        chosen = qwen_short if verified else best_fallback
+
+        if not verified:
+            print(f"[CLIP Verify] Qwen REJECTED "
+                  f"(qwen={qwen_score:.3f}, best_fallback='{best_fallback}'={best_fb_score:.3f}) "
+                  f"→ using fallback.")
+        else:
+            print(f"[CLIP Verify] Qwen ACCEPTED "
+                  f"(qwen={qwen_score:.3f} vs best_fallback='{best_fallback}'={best_fb_score:.3f}).")
+
+        info = {
+            "verified": bool(verified),
+            "qwen_clip_score": float(qwen_score),
+            "best_fallback": best_fallback,
+            "best_fallback_score": float(best_fb_score),
+            "chosen": chosen,
+        }
+        return chosen, info
 
     # ── Step 3: Target image preparation ──────────────────────────────────
 

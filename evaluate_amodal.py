@@ -1,5 +1,7 @@
 import os
+import io
 import json
+import contextlib
 import torch
 import numpy as np
 import cv2
@@ -7,8 +9,29 @@ import gzip
 from tqdm import tqdm
 import pandas as pd
 from datasets import load_dataset
+
+
+@contextlib.contextmanager
+def _silence_output(enabled: bool = True):
+    """
+    Suppress stdout/stderr inside the block. Used to hide noisy per-step DDIM
+    progress bars (and other internal logs) from the inner pipeline while the
+    outer tqdm bar keeps rendering between iterations.
+    """
+    if not enabled:
+        yield
+        return
+    buf_out, buf_err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(buf_out), contextlib.redirect_stderr(buf_err):
+        yield
 from amodal_completer import AmodalCompleter
-from metrics_utils import get_amodal_metrics, calculate_iou, calculate_lpips, calculate_clip_score, calculate_ssim
+from metrics_utils import (
+    calculate_lpips,
+    calculate_clip_score,
+    calculate_feature_similarity,
+    calculate_ssim,
+    calculate_psnr,
+)
 
 class AmodalEvaluator:
     def __init__(self, device="cuda", completer=None):
@@ -42,9 +65,14 @@ class AmodalEvaluator:
             torch.cuda.empty_cache()
         print("[Evaluator] GPU Memory cleared.")
 
-    def evaluate_cocoa(self, ann_file, img_dir, limit=100):
+    def evaluate_cocoa(self, ann_file, img_dir, limit=100, verbose=False):
         """
         Evaluate on the custom COCOA subset JSON.
+
+        Args:
+            verbose: if False (default), per-image internal logs (DDIM bar,
+                     [VLM Reason], etc.) are silenced so only the outer tqdm
+                     progress bar shows. Set True to debug a single image.
         """
         from pycocotools import mask as mask_utils
         
@@ -89,20 +117,24 @@ class AmodalEvaluator:
             # In full COCOA, the 'segmentation' field is the AMODAL shape
             gt_amodal_mask = self._decode_any_mask(ann.get('segmentation'), h, w)
             
+            # Use COCOA's object name (e.g. "dog", "frisbee") for CLIP-text alignment.
+            category = ann.get('name') or ann.get('category', '') or 'object'
+
             # Run Pipeline
             try:
-                output = self.completer.complete(image, visible_mask, all_masks=[])
-                pred_amodal_mask = output['amodal_mask']
-                pred_image = output['inpainted_rgba'][:,:,:3]
-                
-                # Calculate Metrics
-                metrics = get_amodal_metrics(pred_amodal_mask, gt_amodal_mask, visible_mask)
-                
-                # Appearance Metrics
-                metrics['LPIPS'] = calculate_lpips(pred_image, image)
-                metrics['SSIM'] = calculate_ssim(pred_image, image)
-                metrics['filename'] = ann['filename']
-                
+                with _silence_output(enabled=not verbose):
+                    output = self.completer.complete(image, visible_mask, all_masks=[])
+                pred_image = output['inpainted_rgba'][:, :, :3]
+
+                metrics = {
+                    'filename': ann['filename'],
+                    'category': category,
+                    'CLIP_score': calculate_clip_score(pred_image, category),
+                    'LPIPS': calculate_lpips(pred_image, image),
+                    'Feature_Similarity': calculate_feature_similarity(pred_image, image),
+                    'SSIM': calculate_ssim(pred_image, image),
+                    'PSNR': calculate_psnr(pred_image, image),
+                }
                 self.results.append(metrics)
             except Exception as e:
                 print(f"Error processing {ann['filename']}: {e}")
@@ -123,7 +155,7 @@ class AmodalEvaluator:
             return mask_utils.decode(seg).astype(bool)
         return np.zeros((h, w), dtype=bool)
 
-    def evaluate_huggingface(self, dataset_name="shunk031/COCOA", split="validation", limit=100):
+    def evaluate_huggingface(self, dataset_name="shunk031/COCOA", split="validation", limit=100, verbose=False):
         """
         Evaluate directly from a Hugging Face dataset.
         Solves the storage issue by streaming/caching efficiently.
@@ -153,29 +185,25 @@ class AmodalEvaluator:
             if len(gt_amodal_mask.shape) == 3:
                 gt_amodal_mask = gt_amodal_mask[:, :, 0]
             
+            category = sample.get('class_name') or sample.get('category') or 'object'
+
             try:
                 # Run Pipeline
-                output = self.completer.complete(image_np, visible_mask, all_masks=[])
-                pred_amodal_mask = output['amodal_mask']
-                pred_image = output['inpainted_rgba'][:,:,:3] # Get RGB from RGBA
-                
-                # 1. Shape Metrics
-                shape_metrics = get_amodal_metrics(pred_amodal_mask, gt_amodal_mask, visible_mask)
-                
-                # 2. Appearance Metrics (The ones from your CVPR table)
-                lpips_val = calculate_lpips(pred_image, image_np)
-                ssim_val = calculate_ssim(pred_image, image_np)
-                
-                # Full result row
+                with _silence_output(enabled=not verbose):
+                    output = self.completer.complete(image_np, visible_mask, all_masks=[])
+                pred_image = output['inpainted_rgba'][:, :, :3]  # Get RGB from RGBA
+
                 result = {
                     "id": i,
-                    "mIoU": shape_metrics['mIoU'],
-                    "oIoU": shape_metrics['oIoU'],
-                    "LPIPS": lpips_val,
-                    "SSIM": ssim_val
+                    "category": category,
+                    "CLIP_score": calculate_clip_score(pred_image, category),
+                    "LPIPS": calculate_lpips(pred_image, image_np),
+                    "Feature_Similarity": calculate_feature_similarity(pred_image, image_np),
+                    "SSIM": calculate_ssim(pred_image, image_np),
+                    "PSNR": calculate_psnr(pred_image, image_np),
                 }
                 self.results.append(result)
-                
+
             except Exception as e:
                 print(f"Error on sample {i}: {e}")
 
@@ -185,8 +213,9 @@ class AmodalEvaluator:
         df = pd.DataFrame(self.results)
         df.to_csv(filename, index=False)
         print(f"\n[Evaluator] Results saved to {filename}")
-        print(f"Mean mIoU: {df['mIoU'].mean():.4f}")
-        print(f"Mean oIoU: {df['oIoU'].mean():.4f}")
+        for col in ['CLIP_score', 'LPIPS', 'Feature_Similarity', 'SSIM', 'PSNR']:
+            if col in df.columns:
+                print(f"Mean {col}: {df[col].mean():.4f}")
 
 if __name__ == "__main__":
     # Example usage (adjust paths for your Colab environment)
