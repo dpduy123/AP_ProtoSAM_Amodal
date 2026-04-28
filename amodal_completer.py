@@ -31,6 +31,13 @@ from PIL import Image
 
 class AmodalCompleter:
 
+    # Shared class-level instances to prevent redundant loading across instances
+    _pipe = None
+    _clip_model = None
+    _clip_processor = None
+    _shape_predictor = None
+    _vlm = None
+
     def __init__(
         self,
         inpainting_model_id: str = "sd2-community/stable-diffusion-2-inpainting",
@@ -38,32 +45,47 @@ class AmodalCompleter:
         device: Optional[str] = None,
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self._pipe = None
-        self._clip_model = None
-        self._clip_processor = None
-        self._instaorder = None
         
-        # Pix2Gestalt Shape Predictor
-        self._shape_predictor = Pix2GestaltPredictor(device=self.device)
-        
-        # VLM Reasoner (Qwen3-VL-4B)
-        self._vlm = VLMReasoner(device=self.device)
-        
+        # Initialize instances only if not already loaded globally
+        if AmodalCompleter._shape_predictor is None:
+            from amodal_shape_predictor import Pix2GestaltPredictor
+            AmodalCompleter._shape_predictor = Pix2GestaltPredictor(device=self.device)
+            
+        if AmodalCompleter._vlm is None:
+            from vlm_reasoner import VLMReasoner
+            AmodalCompleter._vlm = VLMReasoner(device=self.device)
+            
         self._load_models(inpainting_model_id, clip_model_id)
 
     # ── Model loading ──────────────────────────────────────────────────────
 
     def _load_models(self, inpainting_model_id: str, clip_model_id: str):
+        if AmodalCompleter._pipe is not None:
+             # Already loaded globally
+             return
+
         print("[AmodalCompleter] Loading Stable Diffusion inpainting model...")
         from diffusers import StableDiffusionInpaintPipeline
 
-        self._pipe = StableDiffusionInpaintPipeline.from_pretrained(
+        AmodalCompleter._pipe = StableDiffusionInpaintPipeline.from_pretrained(
             inpainting_model_id,
             torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
             safety_checker=None,
         )
-        self._pipe.to(self.device)
-        self._pipe.set_progress_bar_config(disable=True)
+        AmodalCompleter._pipe.to(self.device)
+        AmodalCompleter._pipe.set_progress_bar_config(disable=True)
+
+        # ── CLIP for Prompt Selection ──
+        if AmodalCompleter._clip_model is None:
+            print("[AmodalCompleter] Loading CLIP model...")
+            from transformers import CLIPModel, CLIPProcessor
+            clip_dtype = torch.float16 if self.device == "cuda" else torch.float32
+            AmodalCompleter._clip_model = CLIPModel.from_pretrained(
+                clip_model_id, torch_dtype=clip_dtype
+            ).to(self.device)
+            AmodalCompleter._clip_processor = CLIPProcessor.from_pretrained(clip_model_id)
+        
+        print("[AmodalCompleter] Models loaded.")
 
     def cleanup(self):
         """
@@ -72,20 +94,21 @@ class AmodalCompleter:
         """
         print("[AmodalCompleter] Cleaning up models and freeing VRAM...")
         
-        if hasattr(self, '_shape_predictor'):
-            self._shape_predictor.cleanup()
-            del self._shape_predictor
+        if AmodalCompleter._shape_predictor is not None:
+            AmodalCompleter._shape_predictor.cleanup()
+            AmodalCompleter._shape_predictor = None
             
-        if hasattr(self, '_vlm'):
-            del self._vlm
+        if AmodalCompleter._vlm is not None:
+            del AmodalCompleter._vlm
+            AmodalCompleter._vlm = None
 
-        if self._pipe is not None:
-            del self._pipe
-            self._pipe = None
+        if AmodalCompleter._pipe is not None:
+            del AmodalCompleter._pipe
+            AmodalCompleter._pipe = None
             
-        if self._clip_model is not None:
-            del self._clip_model
-            self._clip_model = None
+        if AmodalCompleter._clip_model is not None:
+            del AmodalCompleter._clip_model
+            AmodalCompleter._clip_model = None
             
         import gc
         gc.collect()
@@ -93,14 +116,6 @@ class AmodalCompleter:
             torch.cuda.empty_cache()
         print("[AmodalCompleter] Cleanup complete.")
 
-    # ── Model loading ──────────────────────────────────────────────────────
-        from transformers import CLIPModel, CLIPProcessor
-
-        clip_dtype = torch.float16 if self.device == "cuda" else torch.float32
-        self._clip_model = CLIPModel.from_pretrained(
-            clip_model_id, torch_dtype=clip_dtype
-        ).to(self.device)
-        self._clip_processor = CLIPProcessor.from_pretrained(clip_model_id)
 
         print("[AmodalCompleter] Models loaded.")
 
@@ -114,41 +129,39 @@ class AmodalCompleter:
         text_query: str = "",
         max_iter: int = 3,
         epsilon: float = 0.01,
-    ) -> np.ndarray:
+        enable_critic: bool = True,
+        critique_threshold: float = 7.0,
+        max_critic_iter: int = 2,
+    ) -> dict:
         """
         Args:
-            image:        H×W×3 uint8 RGB
-            visible_mask: H×W bool — visible region of target object
-            all_masks:    list of SAM mask dicts (other objects in scene)
-            text_query:   optional text description of the target
-            max_iter:     max inpainting iterations
-            epsilon:      convergence threshold for occluder mask delta
+            image:               H×W×3 uint8 RGB
+            visible_mask:        H×W bool — visible region of target object
+            all_masks:           list of SAM mask dicts (other objects in scene)
+            text_query:          optional text description of the target
+            max_iter:            (legacy) max inpainting iterations
+            epsilon:             (legacy) convergence threshold
+            enable_critic:       run Stage 3 semantic critique loop
+            critique_threshold:  τ — minimum acceptable critic score in [0, 10]
+            max_critic_iter:     maximum number of synthesis attempts
 
         Returns:
-            H×W×4 uint8 RGBA — completed object with transparent background
+            dict with input_image, visible_mask, amodal_mask, inpainted_rgba,
+            vlm_reasoning, critique_history, final_score.
         """
         H, W = image.shape[:2]
 
-        # Step 0: Semantic Reasoning with VLM (The Brain)
-        print("[AmodalCompleter] Step 0: Reasoning with Qwen3-VL...")
-        vlm_guidance = self._vlm.reason_occlusion(image, visible_mask)
+        # ── DUAL GUIDANCE ─────────────────────────────────────────────────
+        # Branch A — Semantic guidance: VLM identifies the missing parts.
+        print("[AmodalCompleter] Dual-Guidance · Branch A: semantic reasoning (Qwen3-VL)...")
+        vlm_guidance = AmodalCompleter._vlm.reason_occlusion(image, visible_mask)
         print(f"[VLM Reason]: {vlm_guidance}")
-        
-        # Output VLM reasoning to a JSON file for logging/inspection
-        try:
-            with open("text_prompt.json", "w", encoding="utf-8") as f:
-                json.dump({"vlm_reasoning": vlm_guidance}, f, indent=4, ensure_ascii=False)
-        except Exception as e:
-            print(f"[AmodalCompleter] Warning: Could not save text_prompt.json: {e}")
 
-        # Step 1: Predict exact Amodal Mask (Shape) using Pix2Gestalt
-        print("[AmodalCompleter] Step 1: Predicting amodal shape...")
-        amodal_mask = self._shape_predictor.predict_full_shape(image, visible_mask)
-        
-        # The region that needs coloring is the difference between full shape and visible
+        # Branch B — Geometric guidance: Pix2Gestalt predicts the amodal mask.
+        print("[AmodalCompleter] Dual-Guidance · Branch B: geometric shape (Pix2Gestalt)...")
+        amodal_mask = AmodalCompleter._shape_predictor.predict_full_shape(image, visible_mask)
         missing_mask = amodal_mask & (~visible_mask.astype(bool))
-        
-        # If there's nothing missing, return early
+
         if not missing_mask.any():
             rgba = self._finalize_rgba(image, amodal_mask, H, W)
             return {
@@ -156,30 +169,79 @@ class AmodalCompleter:
                 "visible_mask": visible_mask,
                 "amodal_mask": amodal_mask,
                 "inpainted_rgba": rgba,
-                "vlm_reasoning": vlm_guidance
+                "vlm_reasoning": vlm_guidance,
+                "critique_history": [],
+                "final_score": None,
             }
 
-        # Step 2: Select best inpainting prompt (Incorporate VLM guidance)
+        # Fuse the two guidance signals: semantic prompt selection on the visible crop,
+        # conditioned on (text_query ⊕ vlm_guidance), produces P_s for the diffusion model.
         semantic_query = f"{text_query} {vlm_guidance}".strip()
-        prompt = self._select_prompt(image, visible_mask, semantic_query)
-        prompt = f"{prompt}, centered, high quality, consistent lighting"
+        base_prompt = self._select_prompt(image, visible_mask, semantic_query)
+        target_img, _ = self._prepare_target_image(image, visible_mask)
 
-        # Step 3: Prepare inpainting target on perfectly clean neutral background
-        target_img, background = self._prepare_target_image(image, visible_mask)
+        # ── SYNTHESIS + SEMANTIC CRITIC LOOP (Stage 2 + Stage 3) ─────────
+        prompt = f"{base_prompt}, centered, high quality, consistent lighting"
+        guidance_scale = 7.5
+        num_inference_steps = 30
+        critique_history: list[dict] = []
+        rgba = None
+        blended_rgb = None
 
-        # Step 4: Single-pass Inpainting (Appearance)
-        print("[AmodalCompleter] Step 4: Synthesizing appearance...")
-        inpaint_img, _ = self._inpaint_step(
-            target_img, missing_mask, prompt, H, W
-        )
+        n_iters = max_critic_iter if enable_critic else 1
+        for crit_iter in range(n_iters):
+            print(f"[AmodalCompleter] Synthesis attempt {crit_iter + 1}/{n_iters} "
+                  f"(guidance={guidance_scale}, steps={num_inference_steps})")
 
-        # Step 5: Alpha blending
-        blended_rgb = self._alpha_blend(image, inpaint_img, visible_mask, amodal_mask)
+            inpaint_img, _ = self._inpaint_step(
+                target_img, missing_mask, prompt, H, W,
+                guidance_scale=guidance_scale,
+                num_inference_steps=num_inference_steps,
+            )
+            blended_rgb = self._alpha_blend(image, inpaint_img, visible_mask, amodal_mask)
+            rgba = self._finalize_rgba(blended_rgb, amodal_mask, H, W)
 
-        # Step 6: Build RGBA output
-        rgba = self._finalize_rgba(blended_rgb, amodal_mask, H, W)
+            if not enable_critic:
+                break
 
-        # Final Cleanup to prevent OOM on subsequent images
+            # Stage 3 — Semantic Critic: feed the completed object back to the VLM.
+            critic_input = self._compose_for_critic(blended_rgb, amodal_mask)
+            critique = AmodalCompleter._vlm.critique(critic_input, original_image_np=image)
+            critique_history.append(critique)
+            print(f"[Critic iter {crit_iter}] score={critique['score']:.2f} "
+                  f"(struct={critique['structural']}, tex={critique['texture']}, "
+                  f"ctx={critique['context']}) — {critique['feedback']}")
+
+            if critique["score"] >= critique_threshold:
+                print(f"[Critic] Accepted at iter {crit_iter} "
+                      f"(score {critique['score']:.2f} ≥ τ={critique_threshold}).")
+                break
+
+            # Refinement: inject critic feedback into prompt and tighten guidance.
+            prompt = (
+                f"{base_prompt}, addressing: {critique['feedback']}, "
+                f"photorealistic, anatomically correct, seamless texture, "
+                f"consistent lighting"
+            )
+            guidance_scale = min(guidance_scale + 1.5, 12.0)
+            num_inference_steps = min(num_inference_steps + 10, 50)
+
+        # Persist VLM reasoning + critique trace for logging/inspection.
+        try:
+            with open("text_prompt.json", "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "vlm_reasoning": vlm_guidance,
+                        "critique_history": [
+                            {k: v for k, v in c.items() if k != "raw"}
+                            for c in critique_history
+                        ],
+                    },
+                    f, indent=4, ensure_ascii=False,
+                )
+        except Exception as e:
+            print(f"[AmodalCompleter] Warning: Could not save text_prompt.json: {e}")
+
         if self.device == "cuda":
             torch.cuda.empty_cache()
 
@@ -188,8 +250,22 @@ class AmodalCompleter:
             "visible_mask": visible_mask,
             "amodal_mask": amodal_mask,
             "inpainted_rgba": rgba,
-            "vlm_reasoning": vlm_guidance
+            "vlm_reasoning": vlm_guidance,
+            "critique_history": critique_history,
+            "final_score": critique_history[-1]["score"] if critique_history else None,
         }
+
+    def _compose_for_critic(
+        self, blended_rgb: np.ndarray, amodal_mask: np.ndarray
+    ) -> np.ndarray:
+        """
+        Place the completed amodal object on a neutral white canvas so the critic
+        evaluates the object itself rather than the surrounding scene clutter.
+        """
+        canvas = np.full_like(blended_rgb, 255, dtype=np.uint8)
+        m = amodal_mask[:, :, np.newaxis] if amodal_mask.ndim == 2 else amodal_mask
+        canvas = np.where(m, blended_rgb, canvas).astype(np.uint8)
+        return canvas
 
     def _finalize_rgba(self, image, amodal_mask, H, W):
         rgba = np.zeros((H, W, 4), dtype=np.uint8)
@@ -477,18 +553,14 @@ class AmodalCompleter:
         candidates = [c for c in candidates if c.strip()]
 
         # CLIP similarity
-        inputs = self._clip_processor(
-            text=candidates,
-            images=[crop_pil] * len(candidates),
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=77,
-        ).to(self.device)
-
         with torch.no_grad():
-            outputs = self._clip_model(**inputs)
-            # Image-text similarity for the crop vs each candidate
+            inputs = AmodalCompleter._clip_processor(
+                text=candidates, 
+                images=[crop_pil] * len(candidates), 
+                return_tensors="pt", 
+                padding=True
+            ).to(self.device)
+            outputs = AmodalCompleter._clip_model(**inputs)
             image_feats = outputs.image_embeds[0:1]  # (1, D)
             text_feats = outputs.text_embeds          # (N, D)
             sims = (image_feats @ text_feats.T).squeeze(0)
@@ -525,6 +597,8 @@ class AmodalCompleter:
         H: int,
         W: int,
         inpaint_size: int = 512,
+        guidance_scale: float = 7.5,
+        num_inference_steps: int = 30,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Run one iteration of Stable Diffusion inpainting.
@@ -549,12 +623,12 @@ class AmodalCompleter:
         )
 
         with torch.inference_mode():
-            result = self._pipe(
+            result = AmodalCompleter._pipe(
                 prompt=prompt,
                 image=pil_image,
                 mask_image=pil_mask,
-                num_inference_steps=30,
-                guidance_scale=7.5,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
                 height=inpaint_size,
                 width=inpaint_size,
             ).images[0]

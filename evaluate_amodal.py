@@ -3,6 +3,7 @@ import json
 import torch
 import numpy as np
 import cv2
+import gzip
 from tqdm import tqdm
 import pandas as pd
 from datasets import load_dataset
@@ -10,16 +11,28 @@ from amodal_completer import AmodalCompleter
 from metrics_utils import get_amodal_metrics, calculate_iou, calculate_lpips, calculate_clip_score, calculate_ssim
 
 class AmodalEvaluator:
-    def __init__(self, device="cuda"):
-        self.completer = AmodalCompleter(device=device)
+    def __init__(self, device="cuda", completer=None):
+        """
+        Args:
+            device:    "cuda" or "cpu"
+            completer: optional pre-loaded AmodalCompleter — pass this to avoid
+                       reloading ~25GB of model weights between notebook cells.
+                       If None, a new AmodalCompleter is constructed (which will
+                       still reuse class-level singletons if already loaded).
+        """
+        self.completer = completer if completer is not None else AmodalCompleter(device=device)
+        self._owns_completer = completer is None
         self.results = []
 
     def cleanup(self):
         """
-        Force cleanup of the underlying models to free VRAM.
+        Free VRAM. Only tears down the underlying models if this evaluator
+        constructed its own completer; otherwise leaves it alone so the caller
+        can keep reusing it.
         """
         if hasattr(self, 'completer'):
-            self.completer.cleanup()
+            if self._owns_completer:
+                self.completer.cleanup()
             del self.completer
         
         import gc
@@ -31,71 +44,84 @@ class AmodalEvaluator:
 
     def evaluate_cocoa(self, ann_file, img_dir, limit=100):
         """
-        Evaluate on COCO Amodal dataset.
-        Requires pycocotools: pip install pycocotools
+        Evaluate on the custom COCOA subset JSON.
         """
-        try:
-            from pycocotools.coco import COCO
-        except ImportError:
-            print("Error: pycocotools not installed. Run 'pip install pycocotools'")
-            return
-
-        coco = COCO(ann_file)
-        img_ids = coco.getImgIds()
+        from pycocotools import mask as mask_utils
+        
+        print(f"[Evaluator] Loading subset annotations from {ann_file}...")
+        
+        # Support for .gz files to prevent sync issues
+        if ann_file.endswith(".gz"):
+            with gzip.open(ann_file, "rt", encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            with open(ann_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        
+        anns = data.get('annotations', [])
         if limit:
-            img_ids = img_ids[:limit]
+            anns = anns[:limit]
 
-        print(f"[Evaluator] Evaluating COCOA on {len(img_ids)} images...")
+        print(f"[Evaluator] Evaluating COCOA on {len(anns)} objects...")
 
-        for img_id in tqdm(img_ids):
-            img_info = coco.loadImgs(img_id)[0]
-            img_path = os.path.join(img_dir, img_info['file_name'])
+        for ann in tqdm(anns):
+            img_path = os.path.join(img_dir, ann['filename'])
             
             if not os.path.exists(img_path):
-                continue
+                # Try cleaning filename if it has ./
+                img_path = os.path.join(img_dir, ann['filename'].replace("./", ""))
+                if not os.path.exists(img_path):
+                    continue
                 
             image = cv2.imread(img_path)
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            h, w = image.shape[:2]
             
-            # Load annotations for this image
-            ann_ids = coco.getAnnIds(imgIds=img_id)
-            anns = coco.loadAnns(ann_ids)
+            # 1. Decode Modal Mask (Visible)
+            # COCOA usually provides visible_mask in 'visible_mask' field as RLE
+            if 'visible_mask' in ann:
+                visible_mask = mask_utils.decode(ann['visible_mask']).astype(bool)
+            else:
+                # Fallback to standard COCO 'segmentation' if it's the visible one
+                visible_mask = self._decode_any_mask(ann.get('segmentation'), h, w)
             
-            for ann in anns:
-                if 'amodal_mask' not in ann or 'mask' not in ann:
-                    continue
+            # 2. Decode Amodal Mask (Full Shape)
+            # In full COCOA, the 'segmentation' field is the AMODAL shape
+            gt_amodal_mask = self._decode_any_mask(ann.get('segmentation'), h, w)
+            
+            # Run Pipeline
+            try:
+                output = self.completer.complete(image, visible_mask, all_masks=[])
+                pred_amodal_mask = output['amodal_mask']
+                pred_image = output['inpainted_rgba'][:,:,:3]
                 
-                # Decode masks
-                visible_mask = coco.annToMask(ann).astype(bool)
-                # COCOA usually stores amodal mask in 'amodal_seg' or similar, 
-                # depends on the specific version of the dataset.
-                # Here we assume a standard binary format.
-                # (You might need to adjust this depending on your JSON structure)
-                gt_amodal_mask = self._decode_amodal_mask(ann, img_info['height'], img_info['width'], coco)
+                # Calculate Metrics
+                metrics = get_amodal_metrics(pred_amodal_mask, gt_amodal_mask, visible_mask)
                 
-                # Run Pipeline
-                try:
-                    output = self.completer.complete(image, visible_mask, all_masks=[])
-                    pred_amodal_mask = output['amodal_mask']
-                    
-                    # Calculate Metrics
-                    metrics = get_amodal_metrics(pred_amodal_mask, gt_amodal_mask, visible_mask)
-                    metrics['img_id'] = img_id
-                    metrics['ann_id'] = ann['id']
-                    
-                    self.results.append(metrics)
-                except Exception as e:
-                    print(f"Error processing ann {ann['id']}: {e}")
+                # Appearance Metrics
+                metrics['LPIPS'] = calculate_lpips(pred_image, image)
+                metrics['SSIM'] = calculate_ssim(pred_image, image)
+                metrics['filename'] = ann['filename']
+                
+                self.results.append(metrics)
+            except Exception as e:
+                print(f"Error processing {ann['filename']}: {e}")
 
-        self.save_results("cocoa_results.csv")
+        self.save_results("cocoa_subset_results.csv")
 
-    def _decode_amodal_mask(self, ann, h, w, coco):
-        # Simplified: in some versions cocoa has 'amodal_mask' as RLE
-        # This part depends on the specific COCOA variant you are using
-        if 'amodal_seg' in ann:
-            # Handle RLE or Polygon
-             return coco.annToMask(ann) # Placeholder: you should use the amodal field
-        return coco.annToMask(ann) # Fallback to modal
+    def _decode_any_mask(self, seg, h, w):
+        from pycocotools import mask as mask_utils
+        if not seg:
+            return np.zeros((h, w), dtype=bool)
+        
+        if isinstance(seg, list):
+            # Polygon format
+            rles = mask_utils.frPyObjects(seg, h, w)
+            return mask_utils.decode(rles).any(axis=2).astype(bool)
+        elif isinstance(seg, dict) and 'counts' in seg:
+            # RLE format
+            return mask_utils.decode(seg).astype(bool)
+        return np.zeros((h, w), dtype=bool)
 
     def evaluate_huggingface(self, dataset_name="shunk031/COCOA", split="validation", limit=100):
         """

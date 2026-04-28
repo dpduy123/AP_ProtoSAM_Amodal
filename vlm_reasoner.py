@@ -71,6 +71,86 @@ class VLMReasoner:
         return output_text.strip()
 
     @torch.no_grad()
+    def critique(self, completed_image_np, original_image_np=None):
+        """
+        Semantic Critic (Stage 3): evaluates the completed amodal object on 3 criteria.
+
+        Args:
+            completed_image_np: H×W×3 RGB of the inpainted object (preferably composed
+                                on a clean canvas so the critic focuses on the object).
+            original_image_np:  optional H×W×3 RGB of the source scene for context.
+
+        Returns:
+            dict with keys:
+              - score (float, 0-10): mean of three criteria
+              - structural, texture, context (float, 0-10)
+              - feedback (str): one-sentence description of main issue
+              - raw (str): full VLM output
+        """
+        if self.model is None:
+            return {"score": 0.0, "structural": 0.0, "texture": 0.0,
+                    "context": 0.0, "feedback": "model not loaded", "raw": ""}
+
+        completed_pil = Image.fromarray(completed_image_np)
+        content = [{"type": "image", "image": completed_pil}]
+        if original_image_np is not None:
+            content.append({"type": "image", "image": Image.fromarray(original_image_np)})
+
+        instruction = (
+            "You are a strict quality critic for amodal object completion. "
+            "The first image is the reconstructed object (visible + hallucinated parts). "
+            + ("The second image is the original scene for context. " if original_image_np is not None else "")
+            + "Rate each criterion on a 0-10 integer scale:\n"
+            "1. STRUCTURAL: shape symmetry and part-level connectivity (e.g. correct number of legs).\n"
+            "2. TEXTURE: color, lighting and material continuity between visible and reconstructed regions.\n"
+            "3. CONTEXT: semantic plausibility — does the completion match the object's identity?\n\n"
+            "Respond EXACTLY in this format and nothing else:\n"
+            "STRUCTURAL: <int>\n"
+            "TEXTURE: <int>\n"
+            "CONTEXT: <int>\n"
+            "FEEDBACK: <one short sentence on the main flaw, or 'good' if no flaw>"
+        )
+        content.append({"type": "text", "text": instruction})
+        messages = [{"role": "user", "content": content}]
+
+        text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        image_inputs, video_inputs = process_vision_info(messages)
+        inputs = self.processor(
+            text=[text], images=image_inputs, videos=video_inputs,
+            padding=True, return_tensors="pt",
+        ).to(self.device)
+
+        generated_ids = self.model.generate(**inputs, max_new_tokens=120)
+        generated_ids_trimmed = [
+            out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+        ]
+        output_text = self.processor.batch_decode(
+            generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+        )[0]
+
+        def _parse(label, default=5.0):
+            m = re.search(rf"{label}\s*:\s*([\d.]+)", output_text, re.IGNORECASE)
+            try:
+                return max(0.0, min(10.0, float(m.group(1)))) if m else default
+            except Exception:
+                return default
+
+        structural = _parse("STRUCTURAL")
+        texture = _parse("TEXTURE")
+        context = _parse("CONTEXT")
+        fb = re.search(r"FEEDBACK\s*:\s*(.+?)(?:\n|$)", output_text, re.IGNORECASE | re.DOTALL)
+        feedback = fb.group(1).strip() if fb else ""
+
+        return {
+            "score": (structural + texture + context) / 3.0,
+            "structural": structural,
+            "texture": texture,
+            "context": context,
+            "feedback": feedback,
+            "raw": output_text,
+        }
+
+    @torch.no_grad()
     def get_missing_region_boxes(self, image_np):
         """
         Uses Qwen-VL's grounding capability to find bounding boxes of occluded/missing parts.
