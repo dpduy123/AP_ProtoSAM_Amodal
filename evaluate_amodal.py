@@ -24,6 +24,20 @@ def _silence_output(enabled: bool = True):
     buf_out, buf_err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(buf_out), contextlib.redirect_stderr(buf_err):
         yield
+
+
+def _apply_visible_mask(img: np.ndarray, visible_mask: np.ndarray) -> np.ndarray:
+    """
+    Zero out RGB pixels outside the visible mask. Returns an RGB image of the
+    same shape (H, W, 3) — pixels inside the mask keep their colour, pixels
+    outside become (0, 0, 0). Used to align with the Ao et al. CVPR 2025
+    evaluation protocol: compare the visible part of the object against the
+    completed version.
+    """
+    if img.ndim == 2:
+        img = np.stack([img] * 3, axis=-1)
+    mask3 = visible_mask.astype(bool)[:, :, None]
+    return np.where(mask3, img, 0).astype(img.dtype)
 from amodal_completer import AmodalCompleter
 from metrics_utils import (
     calculate_lpips,
@@ -126,14 +140,19 @@ class AmodalEvaluator:
                     output = self.completer.complete(image, visible_mask, all_masks=[])
                 pred_image = output['inpainted_rgba'][:, :, :3]
 
+                # Mask both images by visible_mask — Ao et al. protocol: compare
+                # visible part of the object with the completed version.
+                image_v = _apply_visible_mask(image, visible_mask)
+                pred_v = _apply_visible_mask(pred_image, visible_mask)
+
                 metrics = {
                     'filename': ann['filename'],
                     'category': category,
                     'CLIP_score': calculate_clip_score(pred_image, category),
-                    'LPIPS': calculate_lpips(pred_image, image),
-                    'Feature_Similarity': calculate_feature_similarity(pred_image, image),
-                    'SSIM': calculate_ssim(pred_image, image),
-                    'PSNR': calculate_psnr(pred_image, image),
+                    'LPIPS': calculate_lpips(pred_v, image_v),
+                    'Feature_Similarity': calculate_feature_similarity(pred_v, image_v),
+                    'SSIM': calculate_ssim(pred_v, image_v),
+                    'PSNR': calculate_psnr(pred_v, image_v),
                 }
                 self.results.append(metrics)
             except Exception as e:
@@ -193,14 +212,17 @@ class AmodalEvaluator:
                     output = self.completer.complete(image_np, visible_mask, all_masks=[])
                 pred_image = output['inpainted_rgba'][:, :, :3]  # Get RGB from RGBA
 
+                image_v = _apply_visible_mask(image_np, visible_mask)
+                pred_v = _apply_visible_mask(pred_image, visible_mask)
+
                 result = {
                     "id": i,
                     "category": category,
                     "CLIP_score": calculate_clip_score(pred_image, category),
-                    "LPIPS": calculate_lpips(pred_image, image_np),
-                    "Feature_Similarity": calculate_feature_similarity(pred_image, image_np),
-                    "SSIM": calculate_ssim(pred_image, image_np),
-                    "PSNR": calculate_psnr(pred_image, image_np),
+                    "LPIPS": calculate_lpips(pred_v, image_v),
+                    "Feature_Similarity": calculate_feature_similarity(pred_v, image_v),
+                    "SSIM": calculate_ssim(pred_v, image_v),
+                    "PSNR": calculate_psnr(pred_v, image_v),
                 }
                 self.results.append(result)
 
